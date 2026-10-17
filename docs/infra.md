@@ -11,7 +11,7 @@ Sources: [Free instance limits](https://render.com/docs/free) ·
 | Service                  | Render type        | Plan | Notes                                         |
 |--------------------------|--------------------|------|-----------------------------------------------|
 | `shopify-mvp-api`        | Web Service (Node) | Free | Root dir `backend`, branch `main`. Configured in #14. |
-| PostgreSQL               | Postgres           | Free | Created on: `YYYY-MM-DD` (fill in, see expiry below). |
+| PostgreSQL               | Postgres           | Free | Created 2026-10-17 · **expires 2026-11-16** · deleted after 2026-11-30 if not upgraded. |
 | Frontend                 | Static Site        | Free | Set up in #36.                                |
 
 The API must use the **internal** connection string for `DATABASE_URL`. The external
@@ -69,7 +69,7 @@ must be in the same region for the internal URL to work.
 - Paid instances get continuous point-in-time recovery: the **past 3 days** on the Hobby
   workspace plan, **7 days** on Pro or higher, plus logical exports kept for 7 days.
 
-Until then: note the expiry date above, set a calendar reminder a week before it, and
+**Upgrade by 2026-11-16** (database expiry); set a reminder for 2026-11-09. Until then,
 take a `pg_dump` before any risky migration.
 
 The web service can stay on Free for the pilot; the cold start is covered by Shopify's
