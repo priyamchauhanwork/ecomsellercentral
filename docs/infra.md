@@ -10,7 +10,7 @@ Sources: [Free instance limits](https://render.com/docs/free) ·
 
 | Service                  | Render type        | Plan | Notes                                         |
 |--------------------------|--------------------|------|-----------------------------------------------|
-| `shopify-mvp-api`        | Web Service (Node) | Free | Root dir `backend`, branch `main`. Configured in #14. |
+| `shopify-mvp-api`        | Web Service (Python) | Free | Root dir `backend`, branch `main`. Configured in #14. |
 | PostgreSQL               | Postgres           | Free | Created 2026-10-17 · **expires 2026-11-16** · deleted after 2026-11-30 if not upgraded. |
 | Frontend                 | Static Site        | Free | Set up in #36.                                |
 
@@ -52,8 +52,8 @@ must be in the same region for the internal URL to work.
   can time out while it wakes. Shopify retries failed deliveries, and the polling
   fallback (#12) picks up anything still missed. Order intake must stay idempotent
   (#21).
-- **Generated PDFs (#25–#27):** don't rely on `backend/invoices/` surviving. Generate
-  PDFs on request and stream them back, or store them in the database / object storage.
+- **Generated PDFs (#25–#27):** generated on request with ReportLab and returned
+  directly; nothing is written to disk.
 - **Email:** use SendGrid's **HTTP API**, not SMTP — the SMTP ports are blocked.
 - **Logs:** with no shell access, Sentry (#32) and the Render log view are how we debug
   production.

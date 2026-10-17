@@ -26,10 +26,11 @@ carrier integrations.
 
 | Layer      | Technology                            |
 |------------|---------------------------------------|
-| Backend    | Node.js, Express                      |
+| Backend    | Python 3.13, FastAPI, SQLAlchemy + Alembic, uv |
 | Database   | PostgreSQL (Render managed)           |
-| Frontend   | React                                 |
+| Frontend   | React (Vite)                          |
 | Integration| Shopify Admin API + webhooks          |
+| PDFs       | ReportLab                             |
 | Email      | SendGrid                              |
 | Monitoring | Sentry                                |
 | Hosting    | Render (auto-deploys from `main`)     |
@@ -37,9 +38,9 @@ carrier integrations.
 ## Repository layout
 
 ```
-backend/    Express API, Shopify integration, PDF generation
-frontend/   React app
-database/   Schema and migrations
+backend/    FastAPI app, Shopify integration, PDF generation, Alembic migrations
+frontend/   React (Vite) app
+database/   ERD, seed data and SQL notes
 docs/       Wireframes, guides and other documentation
 ```
 
