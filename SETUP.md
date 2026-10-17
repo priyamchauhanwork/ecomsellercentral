@@ -188,7 +188,8 @@ Then edit `.env`:
 | `DATABASE_URL` | `postgresql://mvp:mvp_local@localhost:5432/mvp_db` |
 | `RENDER_DATABASE_URL` | Optional. Render's **external** connection string + `?sslmode=require`, only for running migrations against production |
 | `SHOPIFY_STORE_DOMAIN` | Your store domain only, e.g. `your-store.myshopify.com` (no `https://`, no trailing `/`) |
-| `SHOPIFY_ADMIN_API_ACCESS_TOKEN`, `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_WEBHOOK_SECRET` | From the Shopify app (see #7) |
+| `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` | The app's **Client ID** and **Client secret** (`shpss_…`) from the Shopify Dev Dashboard (see #7). The backend turns them into a 24-hour access token automatically. |
+| `SHOPIFY_ADMIN_API_ACCESS_TOKEN`, `SHOPIFY_WEBHOOK_SECRET` | Leave empty. The token is only for legacy custom apps created in the Shopify admin; webhooks are verified with the client secret. |
 | `SHOPIFY_API_VERSION` | A currently supported version, e.g. `2026-10` |
 | `SELLER_*` | Business details printed on invoices and labels |
 | `SENDGRID_API_KEY` | From SendGrid; can stay empty locally |

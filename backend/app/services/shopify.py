@@ -1,5 +1,10 @@
 """Shopify Admin API client: the only place the backend talks to Shopify.
 
+Authentication:
+- Dev Dashboard apps (the default since 2026): SHOPIFY_API_KEY + SHOPIFY_API_SECRET are
+  exchanged for a 24-hour access token (client credentials grant), renewed automatically.
+- Legacy custom apps created in the Shopify admin: a fixed SHOPIFY_ADMIN_API_ACCESS_TOKEN.
+
 Usage:
     with get_shopify_client() as shopify:
         shop = shopify.get("/shop.json")["shop"]
@@ -8,8 +13,10 @@ Usage:
 """
 
 import logging
+import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -20,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 PAGE_LIMIT = 250  # Shopify's maximum page size for REST list endpoints
 RETRY_STATUSES = {429, 500, 502, 503, 504}
+TOKEN_HEADER = "X-Shopify-Access-Token"
+TOKEN_REFRESH_MARGIN = 300  # renew client-credentials tokens 5 minutes before they expire
 
 
 class ShopifyConfigError(RuntimeError):
@@ -41,12 +50,86 @@ def normalize_store_domain(domain: str) -> str:
     return domain.rstrip("/")
 
 
+class StaticTokenAuth(httpx.Auth):
+    """A fixed Admin API token (legacy custom apps created in the Shopify admin)."""
+
+    def __init__(self, access_token: str) -> None:
+        self._access_token = access_token
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+        request.headers[TOKEN_HEADER] = self._access_token
+        yield request
+
+
+class ClientCredentialsAuth(httpx.Auth):
+    """Dev Dashboard apps: exchange the client ID and secret for a 24-hour access token.
+
+    Only works when the app and the store belong to the same Shopify organization.
+    The token is cached, renewed shortly before it expires, and renewed once more if
+    Shopify answers 401 (e.g. the token was revoked).
+    """
+
+    def __init__(
+        self,
+        store_domain: str,
+        client_id: str,
+        client_secret: str,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.store_domain = normalize_store_domain(store_domain)
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._transport = transport
+        self._clock = clock
+        self._access_token: str | None = None
+        self._expires_at = 0.0
+        self._lock = threading.Lock()
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+        request.headers[TOKEN_HEADER] = self._get_token()
+        response = yield request
+        if response.status_code == 401:
+            request.headers[TOKEN_HEADER] = self._get_token(force_refresh=True)
+            yield request
+
+    def _get_token(self, force_refresh: bool = False) -> str:
+        with self._lock:
+            expiring = self._clock() >= self._expires_at - TOKEN_REFRESH_MARGIN
+            if force_refresh or self._access_token is None or expiring:
+                self._access_token, self._expires_at = self._fetch_token()
+            return self._access_token
+
+    def _fetch_token(self) -> tuple[str, float]:
+        with httpx.Client(transport=self._transport, timeout=30.0) as http:
+            response = http.post(
+                f"https://{self.store_domain}/admin/oauth/access_token",
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                },
+            )
+        if response.is_error:
+            raise ShopifyError(
+                f"Could not get a Shopify access token ({response.status_code}): check "
+                "SHOPIFY_API_KEY and SHOPIFY_API_SECRET, and that the app is installed on "
+                f"{self.store_domain} and both belong to the same Shopify organization",
+                status_code=response.status_code,
+                body=response.text[:1000],
+            )
+        payload = response.json()
+        logger.info("Obtained a Shopify access token for %s", self.store_domain)
+        return payload["access_token"], self._clock() + float(payload.get("expires_in", 86399))
+
+
 class ShopifyClient:
     def __init__(
         self,
         store_domain: str,
-        access_token: str,
         api_version: str,
+        auth: httpx.Auth,
         *,
         timeout: float = 30.0,
         max_retries: int = 5,
@@ -59,11 +142,8 @@ class ShopifyClient:
         self._sleep = sleep
         self._http = httpx.Client(
             base_url=f"https://{self.store_domain}/admin/api/{api_version}",
-            headers={
-                "X-Shopify-Access-Token": access_token,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
+            auth=auth,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
             timeout=timeout,
             transport=transport,
         )
@@ -153,28 +233,37 @@ class ShopifyClient:
     @staticmethod
     def _hint(status_code: int) -> str:
         hints = {
-            401: " (check SHOPIFY_ADMIN_API_ACCESS_TOKEN)",
+            401: " (check the Shopify credentials in .env)",
             403: " (the app is missing an access scope for this call)",
             404: " (check SHOPIFY_STORE_DOMAIN and SHOPIFY_API_VERSION)",
         }
         return hints.get(status_code, "")
 
 
+@lru_cache
+def _client_credentials_auth(
+    store_domain: str, client_id: str, client_secret: str
+) -> ClientCredentialsAuth:
+    """One shared auth per app/store, so the 24-hour token is reused across requests."""
+    return ClientCredentialsAuth(store_domain, client_id, client_secret)
+
+
 def get_shopify_client() -> ShopifyClient:
     """A client built from settings. Use it as a context manager so it gets closed."""
     settings = get_settings()
-    missing = [
-        name
-        for name, value in {
-            "SHOPIFY_STORE_DOMAIN": settings.shopify_store_domain,
-            "SHOPIFY_ADMIN_API_ACCESS_TOKEN": settings.shopify_admin_api_access_token,
-        }.items()
-        if not value
-    ]
-    if missing:
-        raise ShopifyConfigError(f"Missing in .env: {', '.join(missing)}")
-    return ShopifyClient(
-        settings.shopify_store_domain,
-        settings.shopify_admin_api_access_token,
-        settings.shopify_api_version,
-    )
+    if not settings.shopify_store_domain:
+        raise ShopifyConfigError("Missing in .env: SHOPIFY_STORE_DOMAIN")
+
+    auth: httpx.Auth
+    if settings.shopify_admin_api_access_token:
+        auth = StaticTokenAuth(settings.shopify_admin_api_access_token)
+    elif settings.shopify_api_key and settings.shopify_api_secret:
+        auth = _client_credentials_auth(
+            settings.shopify_store_domain, settings.shopify_api_key, settings.shopify_api_secret
+        )
+    else:
+        raise ShopifyConfigError(
+            "Missing in .env: SHOPIFY_API_KEY and SHOPIFY_API_SECRET (Dev Dashboard app), "
+            "or SHOPIFY_ADMIN_API_ACCESS_TOKEN (legacy custom app)"
+        )
+    return ShopifyClient(settings.shopify_store_domain, settings.shopify_api_version, auth)
