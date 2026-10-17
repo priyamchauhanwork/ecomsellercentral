@@ -198,8 +198,6 @@ Then edit `.env`:
 
 ## 6. Run the backend
 
-> Available once the FastAPI skeleton (#8) is merged.
-
 Same commands on macOS and Windows:
 
 ```bash
@@ -213,6 +211,23 @@ Check it: open http://localhost:8000/health (should show `"db": "ok"`) and
 http://localhost:8000/docs for the interactive API docs.
 
 There is no need to activate the virtual environment; `uv run` uses it automatically.
+
+Other backend commands (from `backend/`):
+
+```bash
+uv run pytest                                    # run the tests
+uv run ruff check . && uv run ruff format .      # lint and format
+uv run python -m scripts.check_shopify           # test the Shopify connection (needs the Shopify values in .env)
+```
+
+To run migrations against **Render** from your laptop, override `DATABASE_URL` for one command:
+
+```bash
+DATABASE_URL="$RENDER_DATABASE_URL" uv run alembic upgrade head
+```
+
+In VS Code, select the backend's interpreter so imports resolve: Command Palette →
+**Python: Select Interpreter** → `backend/.venv`.
 
 ---
 
@@ -272,6 +287,6 @@ Then run the `docker run` command from step 3 again.
 | `port is already allocated` on 5432 | Another PostgreSQL is running locally. Stop it, or use `-p 5433:5432` in `docker run` and port `5433` in `DATABASE_URL`. |
 | `Cannot connect to the Docker daemon` | Start Docker Desktop and wait until it is running. |
 | `uv`, `node` or `psql` not found right after installing | Open a new terminal (on macOS, or run `source ~/.zshrc`). |
-| uv uses Anaconda's Python instead of its own (`uv run python -c "import sys; print(sys.executable)"` shows an `anaconda3` path) | Anaconda auto-activates its `base` environment in every terminal, and uv uses an active environment first. Turn that off with `conda config --set auto_activate_base false`, open a new terminal, and run `uv python install 3.13`. Use `conda activate` when you need Anaconda. |
+| `warning: VIRTUAL_ENV=/opt/anaconda3 does not match the project environment` | Harmless: the backend always uses its own `.venv` with uv-managed Python (`python-preference = "only-managed"` in `backend/pyproject.toml`). To silence it, stop Anaconda auto-activating its `base` environment: `conda config --set auto_activate_base false`, then open a new terminal. Use `conda activate` when you need Anaconda. |
 | Windows: Docker Desktop won't start | Make sure `wsl --install` completed and the machine was restarted; virtualization must be enabled in BIOS. |
 | Shopify can't reach `localhost` for webhooks | Expected. Use a tunnel such as `cloudflared` or `ngrok` (see #11). |
