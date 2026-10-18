@@ -319,7 +319,7 @@ class OrderHeader(TimestampMixin, Base):
         back_populates="order_header", order_by="OrderLine.line_number"
     )
     history: Mapped[list["OrderHistory"]] = relationship(
-        back_populates="order_header", order_by="OrderHistory.changed_at"
+        back_populates="order_header", order_by="OrderHistory.order_history_id"
     )
 
 
@@ -387,7 +387,7 @@ class OrderLine(TimestampMixin, Base):
 
     order_header: Mapped[OrderHeader] = relationship(back_populates="lines")
     history: Mapped[list["OrderLineHistory"]] = relationship(
-        back_populates="order_line", order_by="OrderLineHistory.changed_at"
+        back_populates="order_line", order_by="OrderLineHistory.order_line_history_id"
     )
 
 

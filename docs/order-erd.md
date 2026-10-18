@@ -447,3 +447,20 @@ Header amounts are Shopify's own totals (they include shipping), not re-added fr
 **Import runs** (`POST /orders/import`, `ingestion_method = manual_sync`): run in the background; poll `GET /orders/imports/{id}` and list failures with `GET /orders/imports/{id}/rows?status=failed`. One run at a time per connection (409 otherwise); a run with no progress for 30 minutes is marked failed so a new one can start. If Shopify fails midway the run is `failed` and the orders already processed are kept. Without the `read_all_orders` scope Shopify returns only the last 60 days of orders; the response includes a warning.
 
 **Shopify app requirements.** Scopes `read_orders` (and `read_all_orders` for older orders), plus **protected customer data access** for name, email, phone and address; without it Shopify answers 403 to every order request.
+
+## Manual status changes (#10)
+
+`POST /orders/{id}/status` with `{"status": ..., "remarks": ...}` (`backend/app/services/order_status.py`).
+
+| Current status | Can be changed to |
+| --- | --- |
+| `pending` | `shipped`, `delivered`, `cancelled` |
+| `shipped` | `delivered` |
+| `delivered`, `cancelled` | nothing (final) |
+
+- The change is applied to every line that is not already `cancelled` or `returned`: shipped / delivered set `shipped_qty` to the quantity not cancelled and fill `shipped_at` / `delivered_at`; cancelled sets `cancelled_qty` to the quantity not shipped. The header status is then recalculated from the lines.
+- Header and line `version_no` increase; one `ecs_order_history` row (`status_change`, or `cancelled`) and one `ecs_order_line_history` row per changed line are written with `change_source = admin_ui` and the optional `remarks`. Cancelling also sets `cancelled_at` and uses `remarks` as `cancel_reason`.
+- One transaction with the header row locked. Asking for the status the order already has changes nothing (200); any other move returns 409.
+- A later Shopify sync never moves the status back (see "Never backwards" above).
+
+**Listing** (`GET /orders`): newest `order_date` first, excluding soft-deleted orders; `status`, `from` / `to` (dates, Indian day boundaries, both inclusive), `q` (order number, customer name, email or phone; case-insensitive, `%` and `_` matched literally) and `limit` (1–1000, default 500). The response's `total` counts every matching order, beyond `limit`.
