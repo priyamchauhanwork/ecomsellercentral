@@ -242,7 +242,7 @@ def test_archived_and_draft_products():
         archived = session.scalars(select(Article).where(Article.article_code == "old-watch")).one()
     assert statuses == {"7003": "inactive", "7002": "draft"}
     assert archived.status == "archived"
-    assert listing_items()["8301"].status == "inactive"
+    assert listing_items()["8301"].status == "live"  # the SKU is enabled; the product isn't on sale
 
 
 def test_invalid_product_is_skipped_and_the_rest_imports():
@@ -349,7 +349,7 @@ def test_post_import_returns_the_summary_and_get_lists_items(monkeypatch):
     body = client.post("/products/import").json()
     assert body["complete"] and (body["items_created"], body["articles_created"]) == (5, 2)
 
-    items = client.get("/products").json()
+    items = client.get("/products/items").json()
     assert [(i["article_name"], i["sku"]) for i in items] == [
         ("Classic Watch", "WATCH-BLK-40"),
         ("Classic Watch", "WATCH-BLK-42"),

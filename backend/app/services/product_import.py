@@ -365,8 +365,20 @@ def import_variant(
     listing_item.channel_item_id = variant_id
     listing_item.channel_sku = clip(variant.get("sku"), 100)
     listing_item.selling_price = price
-    listing_item.status = "live" if listing.status == "live" else "inactive"
+    # The listing item says whether this SKU is enabled (the listing says whether the
+    # product is). A SKU disabled from the app (#47) looks sold out on Shopify (tracked,
+    # no overselling, 0 available); it stays disabled until someone restocks it there.
+    if not (listing_item.status == "inactive" and variant_sold_out(variant)):
+        listing_item.status = "live"
     session.flush()
+
+
+def variant_sold_out(variant: dict[str, Any]) -> bool:
+    return (
+        bool(variant.get("inventory_management"))
+        and variant.get("inventory_policy") == "deny"
+        and int(variant.get("inventory_quantity") or 0) <= 0
+    )
 
 
 def item_sku(
