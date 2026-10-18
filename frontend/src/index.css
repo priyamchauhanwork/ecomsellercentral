@@ -1,0 +1,483 @@
+/* Minimal light-blue theme. Colours are tokens so later screens stay consistent. */
+:root {
+  --page: #f5f9ff;
+  --surface: #ffffff;
+  --sidebar: #eef5ff;
+  --border: #d9e7fa;
+  --border-strong: #bcd5f5;
+  --text: #1b2a41;
+  --muted: #5d7190;
+  --primary: #2f74d0;
+  --primary-hover: #245fae;
+  --primary-soft: #dcebff;
+  --primary-faint: #f0f6ff;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+
+  --pending: #8a5a00;
+  --pending-bg: #fff4d6;
+  --shipped: #1f5fbf;
+  --shipped-bg: #dcebff;
+  --delivered: #1d6f42;
+  --delivered-bg: #e1f5e9;
+  --cancelled: #5f6b7a;
+  --cancelled-bg: #eef1f5;
+
+  --radius: 8px;
+  --topbar-height: 56px;
+
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--page);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* --- Layout ---------------------------------------------------------------------- */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: var(--topbar-height);
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 0 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.topnav {
+  display: flex;
+  height: 100%;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.topnav-link {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.topnav-link:hover {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.topnav-link.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.body {
+  flex: 1;
+  display: flex;
+}
+
+.sidenav {
+  width: 216px;
+  flex-shrink: 0;
+  padding: 20px 12px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+}
+
+.sidenav-title {
+  margin: 0 0 8px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidenav-link {
+  display: block;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.sidenav-link:hover {
+  background: var(--primary-soft);
+  text-decoration: none;
+}
+
+.sidenav-link.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 32px;
+}
+
+/* --- Page ------------------------------------------------------------------------ */
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.muted {
+  color: var(--muted);
+  margin: 0;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* --- Filters --------------------------------------------------------------------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.field.search {
+  flex: 1;
+  min-width: 220px;
+}
+
+.field select,
+.field input {
+  height: 36px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.field select:focus,
+.field input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.quick-ranges {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+
+.chip {
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--primary);
+  background: var(--primary-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--primary-soft);
+}
+
+.chip.active {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.button {
+  height: 34px;
+  padding: 0 14px;
+  font: inherit;
+  color: #fff;
+  background: var(--primary);
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--primary-hover);
+}
+
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: var(--primary);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+.filters .link-button {
+  height: 36px;
+}
+
+/* --- Table ----------------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  transition: opacity 0.15s;
+}
+
+.orders-table.is-updating {
+  opacity: 0.55;
+}
+
+.orders-table th {
+  position: sticky;
+  top: 0;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--muted);
+  background: var(--primary-faint);
+  border-bottom: 1px solid var(--border);
+}
+
+.orders-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.orders-table tbody tr {
+  cursor: pointer;
+}
+
+.orders-table tbody tr:hover {
+  background: var(--primary-faint);
+}
+
+.orders-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.orders-table .number {
+  text-align: right;
+}
+
+.order-link {
+  font-weight: 600;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge-pending {
+  color: var(--pending);
+  background: var(--pending-bg);
+}
+
+.badge-shipped {
+  color: var(--shipped);
+  background: var(--shipped-bg);
+}
+
+.badge-delivered {
+  color: var(--delivered);
+  background: var(--delivered-bg);
+}
+
+.badge-cancelled {
+  color: var(--cancelled);
+  background: var(--cancelled-bg);
+}
+
+/* --- Feedback -------------------------------------------------------------------- */
+
+.feedback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 16px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.feedback.empty {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.feedback.empty strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.feedback.error {
+  justify-content: space-between;
+  padding: 14px 16px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: #f6c9c4;
+  text-align: left;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--primary-soft);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+/* --- Small screens: the side bar becomes a strip under the top bar ---------------- */
+
+@media (max-width: 768px) {
+  .topbar {
+    gap: 16px;
+    padding: 0 16px;
+  }
+
+  .body {
+    flex-direction: column;
+  }
+
+  .sidenav {
+    width: auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 16px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidenav-title {
+    display: none;
+  }
+
+  .sidenav-link {
+    white-space: nowrap;
+  }
+
+  .content {
+    padding: 16px;
+  }
+
+  .field,
+  .field.search {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+}

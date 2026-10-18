@@ -236,15 +236,21 @@ In VS Code, select the backend's interpreter so imports resolve: Command Palette
 
 ## 7. Run the frontend
 
-> Available once the React app (#15) is merged.
+Create `frontend/.env.local` from the template (it is git-ignored):
 
-Create `frontend/.env.local` with the API address:
+macOS:
 
+```bash
+cp frontend/.env.example frontend/.env.local
 ```
-VITE_API_URL=http://localhost:8000
+
+Windows:
+
+```powershell
+Copy-Item frontend\.env.example frontend\.env.local
 ```
 
-Then, in a second terminal:
+It holds `VITE_API_URL=http://localhost:8000` and `VITE_API_KEY` (leave empty locally). Then, in a second terminal:
 
 ```bash
 cd frontend
@@ -252,7 +258,15 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173.
+Open http://localhost:5173. The backend must be running, and its `CORS_ORIGINS` must include `http://localhost:5173` (the default in `.env.example`).
+
+Other frontend commands (from `frontend/`):
+
+```bash
+npm test          # run the tests
+npm run lint      # lint with oxlint
+npm run build     # production build into frontend/dist
+```
 
 ---
 
