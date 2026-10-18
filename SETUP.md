@@ -224,6 +224,8 @@ uv run python -m scripts.register_webhooks <url> # point Shopify's order webhook
 uv run python -m scripts.seed_orders              # ~1000 test orders (SEED-0001…); --delete removes them (docs/test-data.md)
 ```
 
+**API key.** When `API_SHARED_SECRET` is set in `.env`, every data endpoint (`/orders…`, `/sync/orders`) needs the header `X-API-Key: <API_SHARED_SECRET>`; only `/health` and `/webhooks/orders` are open. With curl: `curl -H "X-API-Key: $API_SHARED_SECRET" localhost:8000/orders`. On http://localhost:8000/docs, click **Authorize** and paste the key once. The frontend sends it from `VITE_API_KEY` in `frontend/.env.local`, which must be the same value. Leave both empty to work without a key locally; in production (`ENVIRONMENT=production`) the key is required, and a missing `API_SHARED_SECRET` makes data endpoints answer 503.
+
 To run migrations against **Render** from your laptop, override `DATABASE_URL` for one command:
 
 ```bash

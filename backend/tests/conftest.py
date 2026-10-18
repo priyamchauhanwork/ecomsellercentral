@@ -15,6 +15,8 @@ TEST_DATABASE_URL = os.environ.get(
 )
 # Must happen before app modules are imported: settings and the engine read it once.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# Tests call the API without a key unless they set one (a developer's .env may hold a key).
+os.environ["API_SHARED_SECRET"] = ""
 
 
 def _create_test_database() -> bool:

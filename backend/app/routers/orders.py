@@ -12,13 +12,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.auth import require_api_key
 from app.db import get_db
 from app.models import OrderHeader, OrderImport, OrderImportRow, OrderLine
 from app.services import order_ingestion
 from app.services.order_status import OrderStatus, StatusChangeNotAllowed, change_order_status
 from app.services.shopify import ShopifyConfigError, ShopifyError
 
-router = APIRouter(prefix="/orders", tags=["orders"])
+# Customer data: every route needs the API key.
+router = APIRouter(prefix="/orders", tags=["orders"], dependencies=[Depends(require_api_key)])
 
 IST = ZoneInfo("Asia/Kolkata")  # order date filters use Indian day boundaries
 
