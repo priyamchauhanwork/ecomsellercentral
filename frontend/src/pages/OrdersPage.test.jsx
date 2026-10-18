@@ -173,11 +173,14 @@ describe("Orders list", () => {
   });
 
   it("opens the order when its row is clicked, without reloading the page", async () => {
-    mockApi(respond({ total: 1, orders: [ORDER] }));
+    mockApi(
+      respond({ total: 1, orders: [ORDER] }),
+      respond({ ...ORDER, lines: [], history: [], bill_same_as_ship: true }),
+    );
     renderAt("/orders");
     await userEvent.click(await screen.findByText("Asha Verma"));
     expect(seen.location.pathname).toBe("/orders/10");
-    expect(screen.getByRole("heading", { name: "Order 10" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Order #1001/ })).toBeInTheDocument();
   });
 
   it("filters by status from the side bar and highlights the view", async () => {

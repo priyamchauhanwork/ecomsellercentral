@@ -28,6 +28,7 @@ export default function OrdersPage() {
   const requestKey = JSON.stringify([status, from, to, q, reloads]);
   const loading = result.key !== requestKey;
   const navigate = useNavigate();
+  const detailState = { listSearch: searchParams.size ? `?${searchParams}` : "" };
 
   // Follow the URL when q changes from outside the box (side bar, Back, Clear), without
   // overwriting what the user is still typing.
@@ -169,7 +170,7 @@ export default function OrdersPage() {
       ) : (
         <div className="table-wrap">
           <table
-            className={`orders-table${loading ? " is-updating" : ""}`}
+            className={`data-table clickable-rows${loading ? " is-updating" : ""}`}
             aria-busy={loading}
           >
             <thead>
@@ -188,11 +189,17 @@ export default function OrdersPage() {
                 <tr
                   key={order.order_header_id}
                   onClick={(event) => {
-                    if (!event.target.closest("a")) navigate(`/orders/${order.order_header_id}`);
+                    if (!event.target.closest("a")) {
+                      navigate(`/orders/${order.order_header_id}`, { state: detailState });
+                    }
                   }}
                 >
                   <td>
-                    <Link to={`/orders/${order.order_header_id}`} className="order-link">
+                    <Link
+                      to={`/orders/${order.order_header_id}`}
+                      state={detailState}
+                      className="order-link"
+                    >
                       {order.order_number}
                     </Link>
                   </td>
