@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { api } from "../api";
 import { EmptyState, ErrorMessage, Loading } from "../components/Feedback";
-import { capitalize, formatDateTime, formatMoney } from "../format";
+import { capitalize, formatDateTime, formatMoney, thumbnailUrl } from "../format";
 import { describeChange, describeSource } from "../orders/history";
 import StatusChangePanel from "../orders/StatusChangePanel";
 import { NEXT_STATUS } from "../orders/status";
@@ -44,6 +44,37 @@ function Detail({ label, children }) {
       <dt>{label}</dt>
       <dd>{children || "—"}</dd>
     </>
+  );
+}
+
+const THUMBNAIL_SIZE = 48; // CSS pixels; requested at 2x for sharp screens
+
+// The ordered product's picture, or a neutral placeholder when the line isn't linked to
+// the catalog, the product has no image, or the image fails to load.
+function ProductThumbnail({ url, name }) {
+  const [failed, setFailed] = useState(false);
+  if (!url || failed) {
+    return (
+      <div className="thumbnail placeholder" role="img" aria-label={`No image for ${name}`}>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm1 2v9.6l3.3-3.3a1 1 0 0 1 1.4 0L13 14.6l1.3-1.3a1 1 0 0 1 1.4 0L18 15.6V6H6Zm9 3a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z"
+          />
+        </svg>
+      </div>
+    );
+  }
+  return (
+    <img
+      className="thumbnail"
+      src={thumbnailUrl(url, THUMBNAIL_SIZE * 2)}
+      alt={name}
+      width={THUMBNAIL_SIZE}
+      height={THUMBNAIL_SIZE}
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -271,8 +302,15 @@ export default function OrderDetailPage() {
               {lines.map((line) => (
                 <tr key={line.order_line_id}>
                   <td>
-                    <div>{line.product_name}</div>
-                    {line.variant_name && <div className="muted small">{line.variant_name}</div>}
+                    <div className="product-cell">
+                      <ProductThumbnail url={line.image_url} name={line.product_name} />
+                      <div>
+                        <div>{line.product_name}</div>
+                        {line.variant_name && (
+                          <div className="muted small">{line.variant_name}</div>
+                        )}
+                      </div>
+                    </div>
                   </td>
                   <td className="muted">{line.sku || "—"}</td>
                   <td className="number">

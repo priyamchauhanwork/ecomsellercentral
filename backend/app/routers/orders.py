@@ -14,9 +14,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.auth import require_api_key
 from app.db import get_db
-from app.models import OrderHeader, OrderImport, OrderImportRow, OrderLine
+from app.models import Article, Item, OrderHeader, OrderImport, OrderImportRow, OrderLine
 from app.services import order_ingestion
 from app.services.order_status import OrderStatus, StatusChangeNotAllowed, change_order_status
+from app.services.product_import import image_for
 from app.services.shopify import ShopifyConfigError, ShopifyError
 
 # Customer data: every route needs the API key.
@@ -180,6 +181,8 @@ class OrderLineOut(BaseModel):
     shipped_at: datetime | None
     delivered_at: datetime | None
     line_status: str
+    # From the linked catalog article (#13); null for lines not linked to the catalog.
+    image_url: str | None = None
     version_no: int
 
 
@@ -321,14 +324,41 @@ def load_order(db: Session, order_id: int, *, for_update: bool = False) -> Order
     return header
 
 
-def order_detail(header: OrderHeader) -> OrderDetail:
-    return OrderDetail.model_validate(header).model_copy(update={"line_count": len(header.lines)})
+def order_detail(db: Session, header: OrderHeader) -> OrderDetail:
+    detail = OrderDetail.model_validate(header).model_copy(update={"line_count": len(header.lines)})
+    images = line_images(db, header.lines)
+    for line in detail.lines:
+        line.image_url = images.get(line.order_line_id)
+    return detail
+
+
+def line_images(db: Session, lines: list[OrderLine]) -> dict[int, str | None]:
+    """Each catalog-linked line's image: its article's image for the ordered variant."""
+    article_ids = {line.product_id for line in lines if line.product_id}
+    if not article_ids:
+        return {}
+    item_ids = {line.variant_id for line in lines if line.variant_id}
+    images = dict(
+        db.execute(
+            select(Article.article_id, Article.images).where(Article.article_id.in_(article_ids))
+        ).all()
+    )
+    values = dict(
+        db.execute(
+            select(Item.item_id, Item.variant_values).where(Item.item_id.in_(item_ids))
+        ).all()
+    )
+    return {
+        line.order_line_id: image_for(images.get(line.product_id), values.get(line.variant_id, {}))
+        for line in lines
+        if line.product_id
+    }
 
 
 @router.get("/{order_id}", response_model=OrderDetail)
 def get_order(order_id: int, db: Session = Depends(get_db)):
     """One order with its lines (by line number) and history (oldest first)."""
-    return order_detail(load_order(db, order_id))
+    return order_detail(db, load_order(db, order_id))
 
 
 @router.post("/{order_id}/status", response_model=OrderDetail)
@@ -349,4 +379,4 @@ def update_order_status(order_id: int, change: StatusChange, db: Session = Depen
         db.commit()
         db.expire_all()
         header = load_order(db, order_id)
-    return order_detail(header)
+    return order_detail(db, header)

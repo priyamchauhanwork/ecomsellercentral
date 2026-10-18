@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
@@ -426,5 +426,44 @@ describe("Mark shipped", () => {
     renderAt("/orders/10");
     await screen.findByRole("heading", { name: /Order #1001/ });
     expect(screen.queryByRole("button", { name: /^Mark/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Product images", () => {
+  const IMAGE = "https://cdn.shopify.com/s/files/1/0787/files/watch.png?v=1";
+
+  it("shows each line's product image, resized and lazy-loaded", async () => {
+    mockApi(respond({ ...ORDER, lines: [{ ...LINE, image_url: IMAGE }] }));
+    renderAt("/orders/10");
+    const image = await screen.findByRole("img", { name: "Classic Watch" });
+    expect(image).toHaveAttribute("src", `${IMAGE}&width=96`);
+    expect(image).toHaveAttribute("loading", "lazy");
+    expect(image).toHaveAttribute("width", "48");
+  });
+
+  it("shows a placeholder when there is no image", async () => {
+    mockApi(respond({ ...ORDER, lines: [{ ...LINE, image_url: null }] }));
+    renderAt("/orders/10");
+    expect(await screen.findByRole("img", { name: "No image for Classic Watch" })).toBeInTheDocument();
+  });
+
+  it("falls back to the placeholder when the image fails to load", async () => {
+    mockApi(respond({ ...ORDER, lines: [{ ...LINE, image_url: IMAGE }] }));
+    renderAt("/orders/10");
+    fireEvent.error(await screen.findByRole("img", { name: "Classic Watch" }));
+    expect(screen.getByRole("img", { name: "No image for Classic Watch" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "Classic Watch" })).not.toBeInTheDocument();
+  });
+
+  it("keeps each line's image with its own line", async () => {
+    const lines = [
+      { ...LINE, image_url: "https://cdn.shopify.com/a.png" },
+      { ...LINE, order_line_id: 2, line_number: 2, product_name: "Strap", image_url: null },
+    ];
+    mockApi(respond({ ...ORDER, lines }));
+    renderAt("/orders/10");
+    const rows = (await screen.findAllByRole("row")).slice(1);
+    expect(within(rows[0]).getByRole("img", { name: "Classic Watch" })).toBeInTheDocument();
+    expect(within(rows[1]).getByRole("img", { name: "No image for Strap" })).toBeInTheDocument();
   });
 });

@@ -615,6 +615,31 @@ a:hover {
   }
 }
 
+/* --- Product thumbnails ------------------------------------------------------- */
+
+.product-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.thumbnail {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  background: var(--primary-faint);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.thumbnail.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--border-strong);
+}
+
 /* --- Status change ------------------------------------------------------------ */
 
 .confirm-panel {

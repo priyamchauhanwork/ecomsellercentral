@@ -27,3 +27,16 @@ export function formatMoney(amount, currency = "INR") {
 export function capitalize(text) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1).replaceAll("_", " ") : "";
 }
+
+// Shopify's CDN resizes images on request (?width=): a thumbnail then needs a few KB
+// instead of the full-size photo. Other hosts get the URL unchanged.
+export function thumbnailUrl(url, width) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "cdn.shopify.com") return url;
+    parsed.searchParams.set("width", String(width));
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}

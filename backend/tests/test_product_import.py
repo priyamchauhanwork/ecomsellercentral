@@ -375,3 +375,53 @@ def test_import_while_another_runs_is_409(monkeypatch):
         other.execute(text("SELECT pg_advisory_lock(:key)"), {"key": 13_000_000 + account_id})
         assert client.post("/products/import").status_code == 409
         other.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": 13_000_000 + account_id})
+
+
+# --- Images on order lines -----------------------------------------------------------------
+
+
+def test_image_for_prefers_the_most_specific_matching_image():
+    images = [
+        {"url": "general.jpg", "filter": {}},
+        {"url": "black.jpg", "filter": {"Colour": "Black"}},
+        {"url": "black-42.jpg", "filter": {"Colour": "Black", "Size": "42mm"}},
+        {"url": "red.jpg", "filter": {"Colour": "Red"}},
+    ]
+    image_for = product_import.image_for
+    assert image_for(images, {"Colour": "Black", "Size": "42mm"}) == "black-42.jpg"
+    assert image_for(images, {"Colour": "Black", "Size": "40mm"}) == "black.jpg"
+    assert image_for(images, {"Colour": "Silver", "Size": "40mm"}) == "general.jpg"
+    assert (
+        image_for([{"url": "red.jpg", "filter": {"Colour": "Red"}}], {"Colour": "Blue"})
+        == "red.jpg"
+    )
+    assert image_for([], {}) is None and image_for(None, {}) is None
+    assert image_for([{"url": "", "filter": {}}], {}) is None
+
+
+def test_order_detail_lines_carry_their_variant_image():
+    run([watch(), strap()])
+    import_orders(
+        [
+            shopify_order(
+                5001,
+                line_items=[
+                    line_item(9001, variant_id=8001),  # Black / 40mm → the black image
+                    line_item(
+                        9002, variant_id=8003, sku="WATCH-SLV-40"
+                    ),  # Silver → the general image
+                    line_item(9003, variant_id=8101, sku=""),  # strap: article without images
+                    line_item(9004, variant_id=999, sku="UNKNOWN"),  # not in the catalog
+                ],
+            )
+        ]
+    )
+    with SessionLocal() as session:
+        order_id = session.scalar(select(OrderLine.order_header_id))
+    lines = client.get(f"/orders/{order_id}").json()["lines"]
+    assert [line["image_url"] for line in lines] == [
+        "https://cdn/black.jpg",
+        "https://cdn/w.jpg",
+        None,
+        None,
+    ]

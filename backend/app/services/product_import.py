@@ -125,6 +125,21 @@ def product_images(product: dict[str, Any], values_by_variant: dict[int, dict[st
     return images
 
 
+def image_for(images: list[dict[str, Any]] | None, values: dict[str, str]) -> str | None:
+    """The image to show for a variant: the most specific image whose filter matches its
+    option values (e.g. the black watch for the black variant), else the article's first
+    image. None when the article has no images."""
+    images = [image for image in images or [] if image.get("url")]
+    matching = [
+        image
+        for image in images
+        if all(values.get(axis) == value for axis, value in (image.get("filter") or {}).items())
+    ]
+    if matching:
+        return max(matching, key=lambda image: len(image.get("filter") or {}))["url"]
+    return images[0]["url"] if images else None
+
+
 def validate(product: dict[str, Any], axes: list[str]) -> None:
     """The ERD's validation rules 1 and 2, before anything is written."""
     if not product.get("id"):
