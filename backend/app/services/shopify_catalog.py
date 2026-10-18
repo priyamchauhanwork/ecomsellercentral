@@ -7,6 +7,7 @@ SKU is shown as sold out (stock tracked, overselling off, quantity 0).
 """
 
 import re
+import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -44,13 +45,24 @@ mutation ($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
     userErrors { field message }
   }
 }"""
+# Inventory mutations require an idempotency key since API 2026-04. A new key per change;
+# the client's retries (e.g. after a 429) resend the same request and key, so Shopify
+# applies the change once.
 INVENTORY_ACTIVATE = """
-mutation ($item: ID!, $location: ID!) {
-  inventoryActivate(inventoryItemId: $item, locationId: $location) { userErrors { field message } }
+mutation ($item: ID!, $location: ID!, $key: String!) {
+  inventoryActivate(inventoryItemId: $item, locationId: $location) @idempotent(key: $key) {
+    userErrors { field message }
+  }
 }"""
 INVENTORY_SET = """
-mutation ($input: InventorySetQuantitiesInput!) {
-  inventorySetQuantities(input: $input) { userErrors { field message } }
+mutation ($input: InventorySetQuantitiesInput!, $key: String!) {
+  inventorySetQuantities(input: $input) @idempotent(key: $key) { userErrors { field message } }
+}"""
+INVENTORY_LEVEL = """
+query ($item: ID!, $location: ID!) {
+  inventoryItem(id: $item) {
+    inventoryLevel(locationId: $location) { quantities(names: ["available"]) { quantity } }
+  }
 }"""
 LOCATION = "{ location { id } }"
 PUBLICATIONS = "{ publications(first: 20) { nodes { id name } } }"
@@ -323,25 +335,54 @@ def set_listing_item_status(
         "productVariantsBulkUpdate",
     )
     # Stocked at the location (no-op when it already is), then the quantity.
-    shopify.graphql(INVENTORY_ACTIVATE, {"item": inventory_item, "location": location})
+    shopify.graphql(
+        INVENTORY_ACTIVATE,
+        {"item": inventory_item, "location": location, "key": str(uuid.uuid4())},
+    )
     item = session.get(Item, listing_item.item_id)
-    quantity = max(item.stock_qty, 0) if status == "live" else 0
-    mutate(
-        shopify,
-        INVENTORY_SET,
-        {
-            "input": {
-                "name": "available",
-                "reason": "correction",
-                "quantities": [
-                    {
-                        "inventoryItemId": inventory_item,
-                        "locationId": location,
-                        "quantity": quantity,
-                    }
-                ],
-            }
-        },
-        "inventorySetQuantities",
+    set_available(
+        shopify, inventory_item, location, max(item.stock_qty, 0) if status == "live" else 0
     )
     listing_item.status = status
+
+
+def available(shopify: ShopifyClient, inventory_item: str, location: str) -> int:
+    level = shopify.graphql(INVENTORY_LEVEL, {"item": inventory_item, "location": location})[
+        "inventoryItem"
+    ]["inventoryLevel"]
+    return level["quantities"][0]["quantity"] if level else 0
+
+
+def set_available(
+    shopify: ShopifyClient, inventory_item: str, location: str, quantity: int
+) -> None:
+    """Set the available quantity. Shopify requires the quantity we expect to replace
+    (compare-and-swap, since 2026-04): if it changed between our read and the write,
+    read it again and retry once; any other error is raised as it is."""
+    for attempt in (1, 2):
+        expected = available(shopify, inventory_item, location)
+        try:
+            mutate(
+                shopify,
+                INVENTORY_SET,
+                {
+                    "input": {
+                        "name": "available",
+                        "reason": "correction",
+                        "quantities": [
+                            {
+                                "inventoryItemId": inventory_item,
+                                "locationId": location,
+                                "quantity": quantity,
+                                "changeFromQuantity": expected,
+                            }
+                        ],
+                    },
+                    "key": str(uuid.uuid4()),
+                },
+                "inventorySetQuantities",
+            )
+            return
+        except ShopifyError:
+            if attempt == 2 or available(shopify, inventory_item, location) == expected:
+                raise

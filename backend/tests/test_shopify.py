@@ -230,3 +230,25 @@ def test_get_shopify_client_picks_auth(monkeypatch):
     use_settings(monkeypatch, shopify_admin_api_access_token="shpat_x", shopify_api_key="id")
     with get_shopify_client() as client:
         assert isinstance(client._http.auth, StaticTokenAuth)
+
+
+def test_network_failures_are_retried_then_reported_as_shopify_errors():
+    attempts = []
+
+    def handler(request):
+        attempts.append(request)
+        if len(attempts) < 3:
+            raise httpx.ConnectTimeout("handshake timed out")
+        return httpx.Response(200, json={"shop": {"name": "Test"}})
+
+    client, sleeps = make_client(handler)
+    assert client.get("/shop.json")["shop"]["name"] == "Test"
+    assert len(attempts) == 3 and sleeps == [1.0, 2.0]
+
+    def down(request):
+        raise httpx.ConnectError("connection refused")
+
+    client, sleeps = make_client(down, max_retries=2)
+    with pytest.raises(ShopifyError, match="Couldn't reach Shopify"):
+        client.get("/shop.json")
+    assert len(sleeps) == 2

@@ -24,6 +24,8 @@ class FakeShopify:
         self.calls: list[tuple[str, dict]] = []
         self.fail = fail or {}  # operation name → error message
         self.next_product = 9_000_000
+        self.available = 7  # the variant's available quantity at the location
+        self.bump_before_set = 0  # simulate someone changing stock between read and write
 
     def __enter__(self):
         return self
@@ -41,6 +43,7 @@ class FakeShopify:
                 "productVariantsBulkUpdate",
                 "inventoryActivate",
                 "inventorySetQuantities",
+                "inventoryLevel",
                 "productVariant",
                 "publications",
                 "location",
@@ -48,6 +51,23 @@ class FakeShopify:
             if op in query
         )
         self.calls.append((name, copy.deepcopy(variables or {})))
+        if name in ("inventoryActivate", "inventorySetQuantities"):  # required since 2026-04
+            assert "@idempotent(key: $key)" in query and (variables or {}).get("key"), name
+        if name == "inventoryLevel":
+            return {
+                "inventoryItem": {"inventoryLevel": {"quantities": [{"quantity": self.available}]}}
+            }
+        if name == "inventorySetQuantities" and name not in self.fail:
+            change = variables["input"]["quantities"][0]
+            assert "changeFromQuantity" in change, "required since 2026-04"
+            if self.bump_before_set:
+                self.available += self.bump_before_set
+                self.bump_before_set = 0
+            if change["changeFromQuantity"] != self.available:
+                return {
+                    name: {"userErrors": [{"field": None, "message": "compare quantity is stale"}]}
+                }
+            self.available = change["quantity"]
         if name in self.fail:
             if self.fail[name] == "raise":
                 raise ShopifyError("Shopify GraphQL error: network down")
@@ -541,6 +561,8 @@ def test_disable_and_enable_one_sku(shopify):
     assert (
         shopify.named("inventorySetQuantities")[-1]["input"]["quantities"][0]["quantity"] == 7
     )  # stock_qty
+    keys = [call["key"] for call in shopify.named("inventorySetQuantities")]
+    assert len(set(keys)) == len(keys)  # a new idempotency key per change
 
 
 def test_sku_status_change_failing_on_shopify_changes_nothing(shopify):
@@ -647,3 +669,14 @@ def test_import_keeps_an_app_disabled_sku_disabled_until_restocked_on_shopify(sh
             )
             == "live"
         )
+
+
+def test_sku_quantity_uses_compare_and_swap_and_retries_once(shopify):
+    detail, listing = imported_watch()
+    target = next(li for li in listing["items"] if li["channel_item_id"] == "8001")
+    url = f"/products/{detail['article_id']}/listing-items/{target['listing_item_id']}/status"
+    shopify.bump_before_set = 3  # stock changes on Shopify between our read and our write
+    assert client.post(url, json={"status": "inactive"}).status_code == 200
+    sets = shopify.named("inventorySetQuantities")
+    assert [s["input"]["quantities"][0]["changeFromQuantity"] for s in sets] == [7, 10]
+    assert shopify.available == 0

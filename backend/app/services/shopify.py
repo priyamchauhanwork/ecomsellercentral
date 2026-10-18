@@ -158,13 +158,26 @@ class ShopifyClient:
         self._http.close()
 
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        """Send a request, retrying rate limits (429) and transient 5xx errors with backoff.
+        """Send a request, retrying rate limits (429), transient 5xx errors and network
+        failures (timeouts, refused connections) with backoff. Raises ShopifyError when
+        Shopify answers with an error or can't be reached after the retries.
 
         `path` is relative to the API base (e.g. "/orders.json") or an absolute URL
-        (pagination links).
+        (pagination links). Retrying writes is safe for the mutations this app sends:
+        each is idempotent (fixed handle, idempotency key, or setting a status).
         """
         for attempt in range(self.max_retries + 1):
-            response = self._http.request(method, path, **kwargs)
+            try:
+                response = self._http.request(method, path, **kwargs)
+            except httpx.TransportError as exc:
+                if attempt == self.max_retries:
+                    raise ShopifyError(f"Couldn't reach Shopify: {exc}") from exc
+                delay = float(min(2**attempt, 30))
+                logger.warning(
+                    "Shopify %s %s failed (%s); retrying in %.1fs", method, path, exc, delay
+                )
+                self._sleep(delay)
+                continue
             if response.status_code not in RETRY_STATUSES:
                 break
             if attempt == self.max_retries:
