@@ -221,6 +221,7 @@ uv run ruff check . && uv run ruff format .      # lint and format
 uv run python -m scripts.check_shopify           # test the Shopify connection (needs the Shopify values in .env)
 uv run python -m scripts.connect_shopify         # create the store's Shopify connection row (once per database)
 uv run python -m scripts.register_webhooks <url> # point Shopify's order webhooks at a public https URL (--remove to delete)
+uv run python -m scripts.seed_orders              # ~1000 test orders (SEED-0001…) for the order screens; --delete removes them
 ```
 
 To run migrations against **Render** from your laptop, override `DATABASE_URL` for one command:
