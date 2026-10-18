@@ -8,7 +8,7 @@ See [Implementation notes](#implementation-notes) for the choices the ERD left o
 
 ## Overview
 
-Seven tables store every order and record exactly how it reached us. Four hold the order itself, two record each import run and its records, and one holds each store's marketplace connection.
+Six order tables store every order and record exactly how it reached us: four hold the order itself, two record each import run and its records. Each order belongs to a seller (`ecs_sellers`) and, for marketplace orders, to the seller's channel account (`ecs_channel_accounts`), both from the [catalog ERD](catalog-erd.md).
 
 Orders arrive through four ingestion methods. Every method creates an `ecs_order_import` run, so all four are tracked the same way.
 
@@ -21,7 +21,7 @@ Orders arrive through four ingestion methods. Every method creates an `ecs_order
 
 | Table | Group | Holds |
 | --- | --- | --- |
-| `ecs_channel_connection` | Configuration | One record per connected marketplace account: sync schedule, sync cursor, webhook setup |
+| `ecs_channel_accounts` | Configuration | One record per connected marketplace account: sync schedule, sync cursor, webhook setup |
 | `ecs_order_import` | Ingestion | One record per import run: CSV upload, sync or webhook delivery |
 | `ecs_order_import_row` | Ingestion | One record per order record received in a run, with the raw payload |
 | `ecs_order_header` | Order | The complete order: customer, addresses, totals, payment, status |
@@ -29,14 +29,14 @@ Orders arrive through four ingestion methods. Every method creates an `ecs_order
 | `ecs_order_history` | Audit | Every change to an order header |
 | `ecs_order_line_history` | Audit | Every change to an order line |
 
-`ecs_channel_connection` is new in this design. Scheduled syncs need somewhere to keep the cursor they resume from, and webhooks need their configuration and signing secret stored.
+The connection data lives on the seller's channel account (`ecs_channel_accounts`, merged from the original `ecs_channel_connection`): scheduled syncs keep the cursor they resume from there, and webhooks their configuration and signing secret reference.
 
 ## Entity relationship diagram
 
 ```mermaid
 erDiagram
-    ecs_channel_connection ||--o{ ecs_order_import : "runs"
-    ecs_channel_connection ||--o{ ecs_order_header : "orders"
+    ecs_channel_accounts ||--o{ ecs_order_import : "runs"
+    ecs_channel_accounts ||--o{ ecs_order_header : "orders"
     ecs_order_import ||--|{ ecs_order_import_row : "records"
     ecs_order_import ||--o{ ecs_order_header : "created_by / last_import"
     ecs_order_header ||--o{ ecs_order_import_row : "processed into"
@@ -44,9 +44,9 @@ erDiagram
     ecs_order_header ||--o{ ecs_order_history : "history"
     ecs_order_line ||--o{ ecs_order_line_history : "history"
 
-    ecs_channel_connection {
-        bigint channel_connection_id PK
-        bigint store_id
+    ecs_channel_accounts {
+        bigint channel_account_id PK
+        bigint seller_id
         varchar channel
         varchar external_account_id
         varchar sync_cursor
@@ -54,7 +54,7 @@ erDiagram
     }
     ecs_order_import {
         bigint order_import_id PK
-        bigint channel_connection_id FK
+        bigint channel_account_id FK
         varchar ingestion_method
         varchar external_event_id
         varchar status
@@ -112,7 +112,7 @@ Provenance is stored as two separate values: **channel** says *where* the order 
 
 | Question | Answered by |
 | --- | --- |
-| Which marketplace or file did the order come from? | `ecs_order_header.channel`, `channel_connection_id` |
+| Which marketplace or file did the order come from? | `ecs_order_header.channel`, `channel_account_id` |
 | How did we first receive it? | `ecs_order_header.ingestion_method`, `created_by_import_id` |
 | How did the latest update arrive, and when? | `ecs_order_header.last_ingestion_method`, `last_import_id`, `last_synced_at` |
 | What exactly did the marketplace or file send? | `ecs_order_import_row.raw_payload` |
@@ -126,29 +126,9 @@ Changes made inside our own system, such as an admin editing an address, have no
 
 Money columns use DECIMAL(12,2), never FLOAT. Every table also has `created_at` and `updated_at` unless stated otherwise.
 
-### ecs\_channel\_connection
+### ecs\_channel\_accounts (was ecs\_channel\_connection)
 
-One record per marketplace account a store has connected. CSV uploads need no connection.
-
-| Column | Type | Key | Description |
-| --- | --- | --- | --- |
-| `channel_connection_id` | BIGINT | PK |  |
-| `store_id` | BIGINT | FK | Store or tenant that owns the connection |
-| `channel` | VARCHAR(30) |  | `shopify`, `amazon`, `flipkart`, `woocommerce` |
-| `connection_name` | VARCHAR(100) |  | Label shown in the UI, e.g. "Main Shopify store" |
-| `external_account_id` | VARCHAR(150) |  | Shop domain or seller ID on the marketplace |
-| `marketplace_region` | VARCHAR(30) |  | Marketplace or region ID, where the channel has several |
-| `credential_ref` | VARCHAR(255) |  | Pointer to the token in a secrets vault; tokens are never stored in this table |
-| `connection_status` | VARCHAR(20) |  | `active`, `auth_expired`, `disconnected`, `error` |
-| `sync_enabled` | BOOLEAN |  | Scheduled pulls on or off |
-| `sync_interval_minutes` | INT |  | How often the scheduled sync runs |
-| `sync_cursor` | VARCHAR(500) |  | Where the next pull resumes: last `updated_at` seen or a next-page token |
-| `last_synced_at` | TIMESTAMP |  | End of the last successful sync |
-| `last_sync_status` | VARCHAR(20) |  | Outcome of the last sync, for the UI |
-| `webhook_enabled` | BOOLEAN |  | Whether webhooks are registered |
-| `webhook_secret_ref` | VARCHAR(255) |  | Pointer to the secret used to verify webhook signatures |
-| `webhook_topics` | JSON |  | Subscribed events, e.g. `orders/create`, `orders/updated` |
-| `created_by` | BIGINT |  | User who connected the account |
+The marketplace connection is the seller's **channel account** from the [catalog ERD](catalog-erd.md): `ecs_channel_connection` was merged into `ecs_channel_accounts` (migration `0f7f1af4ca24`). Besides the catalog columns (`seller_id`, `channel_id` → `ecs_channels`, `account_name`, `external_seller_id` = the Shopify store domain, `is_active`), the account holds the connection's columns unchanged: `marketplace_region`, `credential_ref`, `connection_status`, `sync_enabled`, `sync_interval_minutes`, `sync_cursor`, `last_synced_at`, `last_sync_status`, `webhook_enabled`, `webhook_secret_ref`, `webhook_topics`, `created_by`. One account per `(seller_id, channel_id, external_seller_id)`.
 
 ### ecs\_order\_import
 
@@ -157,8 +137,8 @@ One record per import run, whatever its ingestion method.
 | Column | Type | Key | Description |
 | --- | --- | --- | --- |
 | `order_import_id` | BIGINT | PK |  |
-| `store_id` | BIGINT | FK |  |
-| `channel_connection_id` | BIGINT | FK, nullable | Null for CSV uploads |
+| `seller_id` | BIGINT | FK |  |
+| `channel_account_id` | BIGINT | FK, nullable | Null for CSV uploads |
 | `channel` | VARCHAR(30) |  | `csv`, `shopify`, `amazon`, … |
 | `ingestion_method` | VARCHAR(20) |  | `csv_upload`, `scheduled_sync`, `manual_sync`, `webhook` |
 | `triggered_by_user_id` | BIGINT | FK, nullable | User for CSV uploads and manual syncs; null for scheduled syncs and webhooks |
@@ -206,9 +186,9 @@ One record per order. The provenance columns are listed first.
 | --- | --- | --- | --- |
 | `order_header_id` | BIGINT | PK |  |
 | `order_number` | VARCHAR(30) | Unique | Customer-facing number |
-| `store_id` | BIGINT | FK |  |
+| `seller_id` | BIGINT | FK |  |
 | `channel` | VARCHAR(30) |  | Where the order came from: `csv`, `shopify`, `amazon`, `website`, … |
-| `channel_connection_id` | BIGINT | FK, nullable | Marketplace account; null for CSV and website orders |
+| `channel_account_id` | BIGINT | FK, nullable | Marketplace account; null for CSV and website orders |
 | `external_order_id` | VARCHAR(100) | nullable | Order ID in the source system |
 | `ingestion_method` | VARCHAR(20) |  | How the order was first received |
 | `created_by_import_id` | BIGINT | FK, nullable | Import run that created the order |
@@ -285,8 +265,8 @@ Every relationship is one-to-many. An order can be touched by many import record
 
 | Parent | Child | Cardinality | Foreign key on child | Optional? |
 | --- | --- | --- | --- | --- |
-| `ecs_channel_connection` | `ecs_order_import` | 1 : N | `channel_connection_id` | Yes, null for CSV |
-| `ecs_channel_connection` | `ecs_order_header` | 1 : N | `channel_connection_id` | Yes, null for CSV and website orders |
+| `ecs_channel_accounts` | `ecs_order_import` | 1 : N | `channel_account_id` | Yes, null for CSV |
+| `ecs_channel_accounts` | `ecs_order_header` | 1 : N | `channel_account_id` | Yes, null for CSV and website orders |
 | `ecs_order_import` | `ecs_order_import_row` | 1 : N | `order_import_id` | No |
 | `ecs_order_import` | `ecs_order_header` | 1 : N | `created_by_import_id`, `last_import_id` | Yes |
 | `ecs_order_header` | `ecs_order_import_row` | 1 : N | `order_header_id` | Yes, null until processed or if the record failed |
@@ -302,7 +282,7 @@ All four methods end in the same processing step, so CSV, sync and webhook order
 
 ### Shared processing step (every method)
 
-1. For each `ecs_order_import_row`, look up `ecs_order_header` by `(store_id, channel, external_order_id)`.
+1. For each `ecs_order_import_row`, look up `ecs_order_header` by `(seller_id, channel, external_order_id)`.
 2. Not found → validate and create the header and lines. Set `ingestion_method`, `created_by_import_id` and `last_import_id`. Write a `created` history record. `action_taken = created`.
 3. Found, `payload_hash` matches the last record we are consistent with (the newest `created`, `updated` or `unchanged` row for that order) → `action_taken = unchanged`. Checked before staleness, so re-importing identical data reports `unchanged`.
 4. Found, but the record's `external_updated_at` is older than or equal to the header's → `action_taken = skipped_stale`, no change.
@@ -323,7 +303,7 @@ All four methods end in the same processing step, so CSV, sync and webhook order
 2. Create `ecs_order_import` with `ingestion_method = scheduled_sync`, `triggered_by_user_id = null`, and `cursor_start` from the connection's `sync_cursor`.
 3. Fetch orders changed since the cursor, page by page; each order becomes one import row with its `raw_payload` and `external_updated_at`.
 4. Run the shared processing step.
-5. Only when the run succeeds: save `cursor_end` on the run and copy it to `ecs_channel_connection.sync_cursor`, along with `last_synced_at` and `last_sync_status`.
+5. Only when the run succeeds: save `cursor_end` on the run and copy it to `ecs_channel_accounts.sync_cursor`, along with `last_synced_at` and `last_sync_status`.
 
 ### Manual sync
 
@@ -342,19 +322,19 @@ The two unique constraints marked as duplicate protection are what stop the same
 
 | Table | Columns | Type | Purpose |
 | --- | --- | --- | --- |
-| `ecs_order_header` | `(store_id, channel, external_order_id)` | Unique | Duplicate protection for orders |
+| `ecs_order_header` | `(seller_id, channel, external_order_id)` | Unique | Duplicate protection for orders |
 | `ecs_order_header` | `order_number` | Unique | Lookup by order number |
-| `ecs_order_header` | `(store_id, order_status, order_date)` | Index | Order list with filters |
+| `ecs_order_header` | `(seller_id, order_status, order_date)` | Index | Order list with filters |
 | `ecs_order_header` | `customer_phone` | Index | Support search |
 | `ecs_order_line` | `(order_header_id, line_number)` | Unique | Line order within an order |
 | `ecs_order_line` | `tracking_number`, `sku` | Index | Shipment and product lookups |
-| `ecs_order_import` | `(channel_connection_id, external_event_id)` | Unique | Duplicate protection for webhooks |
-| `ecs_order_import` | `(store_id, created_at)` | Index | Import history screen |
-| `ecs_order_import` | `(channel_connection_id, status)` | Index | Check for a running sync before starting another |
+| `ecs_order_import` | `(channel_account_id, external_event_id)` | Unique | Duplicate protection for webhooks |
+| `ecs_order_import` | `(seller_id, created_at)` | Index | Import history screen |
+| `ecs_order_import` | `(channel_account_id, status)` | Index | Check for a running sync before starting another |
 | `ecs_order_import` | `file_hash` | Index | Repeat-upload warning |
 | `ecs_order_import_row` | `(order_import_id, status)` | Index | Failed records of a run |
 | `ecs_order_import_row` | `(external_order_id)` | Index | All records received for one order |
-| `ecs_channel_connection` | `(store_id, channel, external_account_id)` | Unique | One connection per marketplace account |
+| `ecs_channel_accounts` | `(seller_id, channel, external_account_id)` | Unique | One connection per marketplace account |
 | `ecs_order_history` | `(order_header_id, changed_at)` | Index | Order timeline |
 | `ecs_order_line_history` | `(order_line_id, changed_at)` | Index | Line timeline |
 
@@ -384,7 +364,8 @@ These rules keep the seven tables consistent when CSV uploads, syncs and webhook
 
 Choices made where the ERD left details open (PostgreSQL 18):
 
-- **Not-yet-existing parents.** `store_id`, `customer_id`, `product_id`, `variant_id`, `warehouse_id` and the user columns (`created_by`, `updated_by`, `changed_by`, `triggered_by_user_id`) are plain `BIGINT` with no foreign key yet. The constraints are added in the migration that creates the stores, users, customers, catalog and warehouse tables. Phase 0 is single-store, so `store_id` is always `1` for now.
+- **Sellers and catalog links.** `seller_id` is a foreign key to `ecs_sellers` (seller 1, "Default seller", holds all Phase 0 data), `channel_account_id` to `ecs_channel_accounts`, and `ecs_order_line.product_id` / `variant_id` to `ecs_articles` / `ecs_items` (filled by the product import, #13).
+- **Not-yet-existing parents.** `customer_id`, `warehouse_id` and the user columns (`created_by`, `updated_by`, `changed_by`, `triggered_by_user_id`) are plain `BIGINT` with no foreign key yet. Their foreign keys are added with the users, customers and warehouse tables.
 - **Types.** `JSON` columns are `JSONB`. `TIMESTAMP` columns are `TIMESTAMPTZ` (stored in UTC; reports convert to IST). `CHAR(64)` hashes are `VARCHAR(64)`. `tax_rate` is `NUMERIC(5,2)`; `expected_delivery_date` is `DATE`.
 - **Allowed values are enforced by `CHECK` constraints**, including `channel`. Adding a channel or status means a small migration that replaces the constraint.
 - **Header statuses have no fixed list in the ERD**, so `order_status`, `payment_status` and `fulfillment_status` are unconstrained `VARCHAR(20)` with defaults `pending`, `pending` and `unfulfilled`.
@@ -392,7 +373,7 @@ Choices made where the ERD left details open (PostgreSQL 18):
 - **Nullable where the ERD implies data can be absent or purged.** `raw_payload` and `payload_hash` are nullable so payloads can be purged after ~90 days; `action_taken` stays null until the row is processed.
 - **Extra indexes** on foreign keys used for lookups: `ecs_order_import_row(order_header_id)` and `ecs_order_line_history(order_header_id)`.
 - **Extra checks:** quantities are never negative; `version_no >= 1`; `sync_interval_minutes > 0`.
-- **`order_number` is unique across all stores**, as specified. When Phase 1 adds multiple stores, change it to unique per `(store_id, order_number)`; two Shopify stores can both have `#1001`.
+- **`order_number` is unique across all stores**, as specified. When Phase 1 adds multiple stores, change it to unique per `(seller_id, order_number)`; two Shopify stores can both have `#1001`.
 - **`updated_at`** is refreshed by the ORM on every update. Raw SQL updates must set it themselves.
 - **Deletes are restricted.** No foreign key cascades: orders are soft-deleted (`is_deleted`), and history must never disappear with its parent.
 
@@ -454,7 +435,7 @@ Header amounts are Shopify's own totals (they include shipping), not re-added fr
 
 1. **Signature.** The raw body is signed with base64 HMAC-SHA256 using `SHOPIFY_WEBHOOK_SECRET`, or `SHOPIFY_API_SECRET` when that is empty (Dev Dashboard apps sign with the client secret). Missing or wrong signature → 401, nothing stored. No secret configured → 503, so Shopify retries later.
 2. **Filtering.** Topics with a full order payload are processed: `orders/create`, `orders/updated`, `orders/cancelled`, `orders/fulfilled`, `orders/partially_fulfilled`, `orders/paid`. Any other topic, or a delivery for a different store, is answered 200 and ignored so Shopify stops retrying. A body that isn't JSON → 400.
-3. **Recording.** The run (`ingestion_method = webhook`, `event_topic`, `external_event_id` = `X-Shopify-Webhook-Id`) and its one import row are saved in one transaction. A repeated delivery id hits the unique `(channel_connection_id, external_event_id)` constraint and is answered `{"status": "duplicate"}` without processing, even when two deliveries race.
+3. **Recording.** The run (`ingestion_method = webhook`, `event_topic`, `external_event_id` = `X-Shopify-Webhook-Id`) and its one import row are saved in one transaction. A repeated delivery id hits the unique `(channel_account_id, external_event_id)` constraint and is answered `{"status": "duplicate"}` without processing, even when two deliveries race.
 4. **Answer, then process.** The response goes back immediately; the shared processing step runs in the background, and the run ends `completed` or `failed`. An order that can't be mapped is still answered 200 (it is stored, and retrying wouldn't fix it) and recorded as a failed row.
 5. Webhook runs never block, and are never blocked by, an import or sync run.
 

@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     )
 
     # --- Server ---
-    # Phase 0 is single-store: every row belongs to this store.
-    store_id: int = 1
+    # Phase 0 is single-seller: every row belongs to this seller (ecs_sellers).
+    seller_id: int = 1
     port: int = 8000
     environment: Literal["development", "production"] = "development"
     cors_origins: str = "http://localhost:5173"

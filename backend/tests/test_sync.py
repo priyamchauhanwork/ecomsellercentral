@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from app.config import get_settings
 from app.db import SessionLocal
 from app.main import app
-from app.models import ChannelConnection, OrderHeader, OrderImport
+from app.models import ChannelAccount, OrderHeader, OrderImport
 from app.services import order_ingestion as ingestion
 from tests.shopify_orders import shopify_order
 from tests.test_order_ingestion import FakeShopify, import_orders, new_run
@@ -34,14 +34,14 @@ def sync(trigger=None, **headers):
     return client.post(url, headers=headers)
 
 
-def connection() -> ChannelConnection:
+def connection() -> ChannelAccount:
     with SessionLocal() as session:
-        return session.scalars(select(ChannelConnection)).one()
+        return session.scalars(select(ChannelAccount)).one()
 
 
 def set_connection(**values):
     with SessionLocal.begin() as session:
-        conn = ingestion.ensure_shopify_connection(session)
+        conn = ingestion.ensure_shopify_account(session)
         for key, value in values.items():
             setattr(conn, key, value)
 

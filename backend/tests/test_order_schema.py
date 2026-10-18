@@ -8,13 +8,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import check_db, engine
 from app.models import (
-    ChannelConnection,
+    Channel,
+    ChannelAccount,
     OrderHeader,
     OrderHistory,
     OrderImport,
@@ -27,7 +28,7 @@ pytestmark = pytest.mark.skipif(
     reason="needs the local database with migrations applied (uv run alembic upgrade head)",
 )
 
-STORE_ID = 1
+SELLER_ID = 1
 
 
 @pytest.fixture
@@ -39,24 +40,30 @@ def session():
         transaction.rollback()
 
 
-def make_connection(session) -> ChannelConnection:
-    connection = ChannelConnection(
-        store_id=STORE_ID,
-        channel="shopify",
-        connection_name="Main Shopify store",
-        external_account_id="test-store.myshopify.com",
+def make_connection(session) -> ChannelAccount:
+    """The seller's Shopify account (ecs_channel_accounts)."""
+    channel = session.scalars(select(Channel).where(Channel.code == "SHOPIFY")).one_or_none()
+    if channel is None:
+        channel = Channel(code="SHOPIFY", name="Shopify")
+        session.add(channel)
+        session.flush()
+    account = ChannelAccount(
+        seller_id=SELLER_ID,
+        channel_id=channel.channel_id,
+        account_name="Main Shopify store",
+        external_seller_id="test-store.myshopify.com",
     )
-    session.add(connection)
+    session.add(account)
     session.flush()
-    return connection
+    return account
 
 
 def make_order(session, connection, **overrides) -> OrderHeader:
     values = {
         "order_number": "#1001",
-        "store_id": STORE_ID,
+        "seller_id": SELLER_ID,
         "channel": "shopify",
-        "channel_connection_id": connection.channel_connection_id,
+        "channel_account_id": connection.channel_account_id,
         "external_order_id": "5001",
         "ingestion_method": "webhook",
         "order_date": datetime(2026, 10, 17, 18, 30, tzinfo=UTC),
@@ -71,8 +78,8 @@ def make_order(session, connection, **overrides) -> OrderHeader:
 def test_full_webhook_flow_and_defaults(session):
     connection = make_connection(session)
     run = OrderImport(
-        store_id=STORE_ID,
-        channel_connection_id=connection.channel_connection_id,
+        seller_id=SELLER_ID,
+        channel_account_id=connection.channel_account_id,
         channel="shopify",
         ingestion_method="webhook",
         external_event_id="evt-1",
@@ -121,7 +128,7 @@ def test_full_webhook_flow_and_defaults(session):
 def test_same_order_cannot_be_saved_twice(session):
     connection = make_connection(session)
     make_order(session, connection)
-    with pytest.raises(IntegrityError, match="uq_ecs_order_header_store_id_channel_external"):
+    with pytest.raises(IntegrityError, match="uq_ecs_order_header_seller_id_channel_external"):
         make_order(session, connection, order_number="#1001-dup")
 
 
@@ -133,7 +140,7 @@ def test_orders_without_external_id_do_not_collide(session):
         channel="website",
         external_order_id=None,
         ingestion_method="direct",
-        channel_connection_id=None,
+        channel_account_id=None,
     )
     make_order(
         session,
@@ -142,7 +149,7 @@ def test_orders_without_external_id_do_not_collide(session):
         channel="website",
         external_order_id=None,
         ingestion_method="direct",
-        channel_connection_id=None,
+        channel_account_id=None,
     )
 
 
@@ -151,14 +158,14 @@ def test_repeat_webhook_delivery_is_rejected(session):
     for _ in range(2):
         session.add(
             OrderImport(
-                store_id=STORE_ID,
-                channel_connection_id=connection.channel_connection_id,
+                seller_id=SELLER_ID,
+                channel_account_id=connection.channel_account_id,
                 channel="shopify",
                 ingestion_method="webhook",
                 external_event_id="evt-same",
             )
         )
-    with pytest.raises(IntegrityError, match="uq_ecs_order_import_channel_connection_id"):
+    with pytest.raises(IntegrityError, match="uq_ecs_order_import_channel_account_id"):
         session.flush()
 
 

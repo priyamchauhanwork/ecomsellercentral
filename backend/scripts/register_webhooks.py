@@ -13,7 +13,7 @@ import argparse
 import sys
 
 from app.db import SessionLocal
-from app.services.order_ingestion import ensure_shopify_connection
+from app.services.order_ingestion import ensure_shopify_account
 from app.services.shopify import ShopifyConfigError, ShopifyError, get_shopify_client
 
 TOPICS = {"ORDERS_CREATE": "orders/create", "ORDERS_UPDATED": "orders/updated"}
@@ -79,9 +79,9 @@ def main() -> int:
                     print(f"{topic}: registered")
 
         with SessionLocal.begin() as session:
-            connection = ensure_shopify_connection(session)
-            connection.webhook_enabled = not args.remove
-            connection.webhook_topics = [] if args.remove else list(TOPICS.values())
+            account = ensure_shopify_account(session)
+            account.webhook_enabled = not args.remove
+            account.webhook_topics = [] if args.remove else list(TOPICS.values())
     except (ShopifyConfigError, ShopifyError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

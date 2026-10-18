@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.db import SessionLocal
 from app.main import app
-from app.models import ChannelConnection, OrderHeader, OrderImport, OrderImportRow
+from app.models import ChannelAccount, OrderHeader, OrderImport, OrderImportRow
 from app.services import order_ingestion as ingestion
 from scripts import register_webhooks
 from tests.shopify_orders import shopify_order
@@ -106,7 +106,7 @@ def test_update_then_older_update_is_stale():
 def test_missing_or_invalid_signature_is_401_and_writes_nothing(signature):
     response = deliver(shopify_order(), signature=signature)
     assert response.status_code == 401
-    assert count(OrderImport) == 0 and count(ChannelConnection) == 0
+    assert count(OrderImport) == 0 and count(ChannelAccount) == 0
 
 
 def test_repeat_delivery_is_recorded_once():
@@ -161,8 +161,8 @@ def test_bad_order_is_accepted_and_recorded_as_failed():
 
 def test_webhooks_and_imports_do_not_block_each_other():
     with SessionLocal.begin() as session:  # an import in progress
-        connection = ingestion.ensure_shopify_connection(session)
-        ingestion.start_import(session, connection.channel_connection_id, "manual_sync")
+        connection = ingestion.ensure_shopify_account(session)
+        ingestion.start_import(session, connection.channel_account_id, "manual_sync")
     assert deliver(shopify_order()).json()["status"] == "accepted"
 
     with SessionLocal.begin() as session:  # a webhook run still pending...
@@ -173,7 +173,7 @@ def test_webhooks_and_imports_do_not_block_each_other():
             .values(status="completed")
         )
     with SessionLocal.begin() as session:  # ...doesn't block a new import
-        ingestion.start_import(session, connection.channel_connection_id, "manual_sync")
+        ingestion.start_import(session, connection.channel_account_id, "manual_sync")
 
 
 # --- scripts/register_webhooks ------------------------------------------------------------
@@ -212,7 +212,7 @@ def run_script(monkeypatch, fake, *args):
 
 def connection_flags():
     with SessionLocal() as session:
-        connection = session.scalars(select(ChannelConnection)).one()
+        connection = session.scalars(select(ChannelAccount)).one()
         return connection.webhook_enabled, connection.webhook_topics
 
 

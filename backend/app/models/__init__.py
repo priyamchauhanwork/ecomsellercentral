@@ -11,7 +11,6 @@ from app.models.catalog import (
     Seller,
 )
 from app.models.orders import (
-    ChannelConnection,
     OrderHeader,
     OrderHistory,
     OrderImport,
@@ -29,7 +28,6 @@ __all__ = [
     "ChannelListingItem",
     "Item",
     "Seller",
-    "ChannelConnection",
     "OrderHeader",
     "OrderHistory",
     "OrderImport",

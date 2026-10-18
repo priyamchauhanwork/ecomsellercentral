@@ -177,9 +177,9 @@ Choices made where the ERD left details open (PostgreSQL 18):
 - **No reference data is inserted.** Channels (with their `default_split_axes`) and sellers are created by the app or a seed step.
 - **Deletes are restricted** (no cascades); archive with `status` instead.
 
-### Relation to the order tables
+### Relation to the order tables (migration `0f7f1af4ca24`)
 
-- `ecs_order_header.store_id` and `ecs_channel_connection.store_id` mean the seller; they become foreign keys to `ecs_sellers` once a seller row exists (Phase 0 uses store 1).
-- `ecs_channel_connection` (order sync: cursor, webhooks) and `ecs_channel_accounts` (catalog listings) both describe a seller's account on a channel. Linking them, for example a `channel_account_id` on `ecs_channel_connection`, is a follow-up decision.
-- `ecs_order_line.variant_id` / `product_id` will point at `ecs_items` / `ecs_articles` when the product import (#13) links order lines to the catalog.
-
+- **`ecs_channel_accounts` is also the order-sync connection.** The order ERD's `ecs_channel_connection` described the same thing (a seller's account on a channel) and was merged into it. The account gained the connection's columns: `marketplace_region`, `credential_ref`, `connection_status` (`active` / `auth_expired` / `disconnected` / `error`), `sync_enabled`, `sync_interval_minutes` (> 0), `sync_cursor`, `last_synced_at`, `last_sync_status`, `webhook_enabled`, `webhook_secret_ref`, `webhook_topics`, `created_by`, plus a unique `(seller_id, channel_id, external_seller_id)`; for Shopify, `external_seller_id` is the store domain. Existing connections were copied into accounts and the orders re-pointed.
+- **Orders belong to sellers.** `ecs_order_header.seller_id` and `ecs_order_import.seller_id` (formerly `store_id`) are foreign keys to `ecs_sellers`; `channel_account_id` (formerly `channel_connection_id`) points at `ecs_channel_accounts`. The migration created seller 1, "Default seller", for the existing Phase 0 data; the app uses `SELLER_ID` (default 1).
+- **Order lines link to the catalog.** `ecs_order_line.product_id` → `ecs_articles`, `variant_id` → `ecs_items` (foreign keys, empty until the product import, #13, links them).
+- The `SHOPIFY` row in `ecs_channels` is created by the app when it first connects the store.

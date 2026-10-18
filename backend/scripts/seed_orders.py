@@ -116,7 +116,7 @@ def order_time(rng: random.Random, index: int, now: datetime) -> datetime:
     return min(placed, now).astimezone(UTC)
 
 
-def build_order(rng: random.Random, index: int, now: datetime, store_id: int) -> OrderHeader:
+def build_order(rng: random.Random, index: int, now: datetime, seller_id: int) -> OrderHeader:
     status = rng.choices(list(STATUS_WEIGHTS), weights=STATUS_WEIGHTS.values())[0]
     placed = order_time(rng, index, now)
     city, state, state_code, pin = rng.choice(CITIES)
@@ -193,7 +193,7 @@ def build_order(rng: random.Random, index: int, now: datetime, store_id: int) ->
     paid = total if payment in ("paid", "refunded") else Decimal("0")
 
     order = OrderHeader(
-        store_id=store_id,
+        seller_id=seller_id,
         order_number=f"SEED-{index:04d}",
         channel="website",
         external_order_id=f"{SEED_PREFIX}{index:06d}",
@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
 
         rng = random.Random(args.seed)
         now = datetime.now(UTC)
-        orders = [build_order(rng, i, now, settings.store_id) for i in range(1, args.count + 1)]
+        orders = [build_order(rng, i, now, settings.seller_id) for i in range(1, args.count + 1)]
         session.add_all(orders)
         session.flush()
         session.add_all([entry for order in orders for entry in line_history(order)])

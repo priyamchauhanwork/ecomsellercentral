@@ -1,7 +1,8 @@
 """Order management & import tables (see docs/order-erd.md).
 
-Columns whose parent tables don't exist yet (stores, users, customers, catalog,
-warehouses) are plain BIGINTs; their foreign keys are added when those tables are.
+Orders belong to a seller (ecs_sellers) and, when they come from a marketplace, to the
+seller's account on it (ecs_channel_accounts, in app/models/catalog.py). Columns whose
+parent tables don't exist yet (users, customers, warehouses) are plain BIGINTs.
 """
 
 from datetime import date, datetime
@@ -32,11 +33,9 @@ from app.models.base import Base, TimestampMixin, bigint_pk, in_check, money
 # --- Allowed values -------------------------------------------------------------------
 
 CHANNELS = ("csv", "website", "shopify", "amazon", "flipkart", "woocommerce")
-MARKETPLACE_CHANNELS = ("shopify", "amazon", "flipkart", "woocommerce")
 IMPORT_INGESTION_METHODS = ("csv_upload", "scheduled_sync", "manual_sync", "webhook")
 ORDER_INGESTION_METHODS = (*IMPORT_INGESTION_METHODS, "direct")
 CHANGE_SOURCES = (*IMPORT_INGESTION_METHODS, "admin_ui", "customer", "system")
-CONNECTION_STATUSES = ("active", "auth_expired", "disconnected", "error")
 IMPORT_STATUSES = (
     "pending",
     "validating",
@@ -84,42 +83,6 @@ LINE_HISTORY_ACTIONS = (
 )
 
 
-# --- Configuration --------------------------------------------------------------------
-
-
-class ChannelConnection(TimestampMixin, Base):
-    """One connected marketplace account. CSV uploads need no connection."""
-
-    __tablename__ = "ecs_channel_connection"
-    __table_args__ = (
-        UniqueConstraint("store_id", "channel", "external_account_id"),
-        CheckConstraint(in_check("channel", MARKETPLACE_CHANNELS), name="channel"),
-        CheckConstraint(
-            in_check("connection_status", CONNECTION_STATUSES), name="connection_status"
-        ),
-        CheckConstraint("sync_interval_minutes > 0", name="sync_interval_positive"),
-    )
-
-    channel_connection_id: Mapped[int] = bigint_pk()
-    store_id: Mapped[int] = mapped_column(BigInteger)  # FK once a stores table exists
-    channel: Mapped[str] = mapped_column(String(30))
-    connection_name: Mapped[str] = mapped_column(String(100))
-    external_account_id: Mapped[str] = mapped_column(String(150))
-    marketplace_region: Mapped[str | None] = mapped_column(String(30))
-    # Pointer to the token in a secrets store; tokens are never stored in this table.
-    credential_ref: Mapped[str | None] = mapped_column(String(255))
-    connection_status: Mapped[str] = mapped_column(String(20), server_default="active")
-    sync_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
-    sync_interval_minutes: Mapped[int] = mapped_column(Integer, server_default="15")
-    sync_cursor: Mapped[str | None] = mapped_column(String(500))
-    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_sync_status: Mapped[str | None] = mapped_column(String(20))
-    webhook_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
-    webhook_secret_ref: Mapped[str | None] = mapped_column(String(255))
-    webhook_topics: Mapped[list[str] | None] = mapped_column(JSONB)
-    created_by: Mapped[int | None] = mapped_column(BigInteger)  # FK once a users table exists
-
-
 # --- Ingestion ------------------------------------------------------------------------
 
 
@@ -129,9 +92,9 @@ class OrderImport(TimestampMixin, Base):
     __tablename__ = "ecs_order_import"
     __table_args__ = (
         # Duplicate protection for webhooks: one run per marketplace event.
-        UniqueConstraint("channel_connection_id", "external_event_id"),
-        Index(None, "store_id", "created_at"),
-        Index(None, "channel_connection_id", "status"),
+        UniqueConstraint("channel_account_id", "external_event_id"),
+        Index(None, "seller_id", "created_at"),
+        Index(None, "channel_account_id", "status"),
         Index(None, "file_hash"),
         CheckConstraint(in_check("channel", CHANNELS), name="channel"),
         CheckConstraint(
@@ -141,9 +104,9 @@ class OrderImport(TimestampMixin, Base):
     )
 
     order_import_id: Mapped[int] = bigint_pk()
-    store_id: Mapped[int] = mapped_column(BigInteger)
-    channel_connection_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ecs_channel_connection.channel_connection_id")
+    seller_id: Mapped[int] = mapped_column(ForeignKey("ecs_sellers.seller_id"))
+    channel_account_id: Mapped[int | None] = mapped_column(  # null for CSV uploads
+        ForeignKey("ecs_channel_accounts.channel_account_id")
     )
     channel: Mapped[str] = mapped_column(String(30))
     ingestion_method: Mapped[str] = mapped_column(String(20))
@@ -215,8 +178,8 @@ class OrderHeader(TimestampMixin, Base):
     __table_args__ = (
         # Duplicate protection for orders. NULL external_order_id (website orders) never
         # collides, because Postgres treats NULLs as distinct.
-        UniqueConstraint("store_id", "channel", "external_order_id"),
-        Index(None, "store_id", "order_status", "order_date"),
+        UniqueConstraint("seller_id", "channel", "external_order_id"),
+        Index(None, "seller_id", "order_status", "order_date"),
         Index(None, "customer_phone"),
         CheckConstraint(in_check("channel", CHANNELS), name="channel"),
         CheckConstraint(
@@ -231,12 +194,12 @@ class OrderHeader(TimestampMixin, Base):
 
     order_header_id: Mapped[int] = bigint_pk()
     order_number: Mapped[str] = mapped_column(String(30), unique=True)
-    store_id: Mapped[int] = mapped_column(BigInteger)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("ecs_sellers.seller_id"))
 
     # Provenance
     channel: Mapped[str] = mapped_column(String(30))
-    channel_connection_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ecs_channel_connection.channel_connection_id")
+    channel_account_id: Mapped[int | None] = mapped_column(  # null for CSV / website orders
+        ForeignKey("ecs_channel_accounts.channel_account_id")
     )
     external_order_id: Mapped[str | None] = mapped_column(String(100))
     ingestion_method: Mapped[str] = mapped_column(String(20))
@@ -331,6 +294,7 @@ class OrderLine(TimestampMixin, Base):
         UniqueConstraint("order_header_id", "line_number"),
         Index(None, "tracking_number"),
         Index(None, "sku"),
+        Index(None, "variant_id"),
         CheckConstraint(in_check("line_status", LINE_STATUSES), name="line_status"),
         CheckConstraint(
             "ordered_qty >= 0 AND shipped_qty >= 0 AND cancelled_qty >= 0 AND returned_qty >= 0",
@@ -344,8 +308,8 @@ class OrderLine(TimestampMixin, Base):
     external_line_id: Mapped[str | None] = mapped_column(String(100))
 
     # Catalog links (FKs once the catalog tables exist) and product snapshot
-    product_id: Mapped[int | None] = mapped_column(BigInteger)
-    variant_id: Mapped[int | None] = mapped_column(BigInteger)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("ecs_articles.article_id"))
+    variant_id: Mapped[int | None] = mapped_column(ForeignKey("ecs_items.item_id"))
     sku: Mapped[str | None] = mapped_column(String(100))
     product_name: Mapped[str] = mapped_column(String(255))
     variant_name: Mapped[str | None] = mapped_column(String(255))

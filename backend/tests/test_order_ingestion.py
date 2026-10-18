@@ -9,7 +9,9 @@ from sqlalchemy import func, select, update
 
 from app.db import SessionLocal
 from app.models import (
-    ChannelConnection,
+    Article,
+    ChannelAccount,
+    Item,
     OrderHeader,
     OrderHistory,
     OrderImport,
@@ -52,9 +54,9 @@ class FakeShopify:
 
 def new_run(method="manual_sync") -> int:
     with SessionLocal.begin() as session:
-        connection = ingestion.ensure_shopify_connection(session)
+        connection = ingestion.ensure_shopify_account(session)
         return ingestion.start_import(
-            session, connection.channel_connection_id, method
+            session, connection.channel_account_id, method
         ).order_import_id
 
 
@@ -105,7 +107,7 @@ def test_import_creates_orders_lines_and_history():
         order = order_by_external_id(session)
         assert order.channel == "shopify" and order.ingestion_method == "manual_sync"
         assert order.created_by_import_id == run.order_import_id == order.last_import_id
-        assert order.channel_connection_id is not None and order.store_id == 1
+        assert order.channel_account_id is not None and order.seller_id == 1
         assert len(order.lines) == 1 and order.lines[0].ordered_qty == 2
         history = order.history
         assert [(h.action_type, h.change_source) for h in history] == [("created", "manual_sync")]
@@ -228,10 +230,17 @@ def test_order_edit_adds_and_removes_lines():
 def test_catalog_link_survives_reimport():
     import_orders([shopify_order()])
     with SessionLocal.begin() as session:  # what the product import (#13) will do
-        order_by_external_id(session).lines[0].variant_id = 42
+        article = Article(seller_id=1, article_code="WATCH-CHR", name="Classic Watch")
+        article.items = [Item(seller_id=1, sku="WATCH-BLK-42")]
+        session.add(article)
+        session.flush()
+        line = order_by_external_id(session).lines[0]
+        line.product_id, line.variant_id = article.article_id, article.items[0].item_id
+        linked = (line.product_id, line.variant_id)
     import_orders([fulfilled(shopify_order(updated_at="2026-10-18T09:00:00+05:30"))])
     with SessionLocal() as session:
-        assert order_by_external_id(session).lines[0].variant_id == 42
+        line = order_by_external_id(session).lines[0]
+        assert (line.product_id, line.variant_id) == linked
 
 
 def test_bad_order_fails_alone_and_run_is_partially_completed():
@@ -389,9 +398,9 @@ def test_concurrently_created_order_is_retried_as_an_update(monkeypatch):
 
 def test_connection_row_is_created_once_and_names_env_vars():
     with SessionLocal.begin() as session:
-        first = ingestion.ensure_shopify_connection(session)
-        again = ingestion.ensure_shopify_connection(session)
-        assert first.channel_connection_id == again.channel_connection_id
+        first = ingestion.ensure_shopify_account(session)
+        again = ingestion.ensure_shopify_account(session)
+        assert first.channel_account_id == again.channel_account_id
         assert first.credential_ref.startswith("env:") and "shpss" not in first.credential_ref
     with SessionLocal() as session:
-        assert session.scalar(select(func.count()).select_from(ChannelConnection)) == 1
+        assert session.scalar(select(func.count()).select_from(ChannelAccount)) == 1

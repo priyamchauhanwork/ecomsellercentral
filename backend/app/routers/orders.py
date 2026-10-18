@@ -82,8 +82,8 @@ def import_orders(background_tasks: BackgroundTasks, db: Session = Depends(get_d
     warnings = [] if "read_all_orders" in scopes else [READ_ALL_ORDERS_WARNING]
 
     try:
-        connection = order_ingestion.ensure_shopify_connection(db)
-        run = order_ingestion.start_import(db, connection.channel_connection_id, "manual_sync")
+        account = order_ingestion.ensure_shopify_account(db)
+        run = order_ingestion.start_import(db, account.channel_account_id, "manual_sync")
         db.commit()
     except order_ingestion.ImportAlreadyRunning as exc:
         db.rollback()

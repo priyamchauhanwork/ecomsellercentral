@@ -23,7 +23,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import (
-    ChannelConnection,
+    Channel,
+    ChannelAccount,
     OrderHeader,
     OrderHistory,
     OrderImport,
@@ -55,11 +56,12 @@ STALE_RUN_AFTER = timedelta(minutes=30)
 # Each sync re-reads this much before its cursor, so orders updated while the previous
 # sync was paging aren't missed. Re-read orders are reported "unchanged".
 SYNC_OVERLAP = timedelta(minutes=5)
+SHOPIFY_CHANNEL_CODE = "SHOPIFY"  # ecs_channels.code
 # Rows whose payload we are consistent with; the newest one's hash is "last applied".
 CONSISTENT_ACTIONS = ("created", "updated", "unchanged")
 ORDER_STATUS_RANK = {"pending": 0, "shipped": 1, "delivered": 2, "cancelled": 3}
 ORDER_CREATE_RACE_CONSTRAINTS = {
-    "uq_ecs_order_header_store_id_channel_external_order_id",
+    "uq_ecs_order_header_seller_id_channel_external_order_id",
     "uq_ecs_order_header_order_number",
 }
 COUNTER_FOR_ACTION = {
@@ -120,13 +122,15 @@ def json_safe(value: Any) -> Any:
     return value
 
 
-# --- Connection and runs ----------------------------------------------------------------
+# --- Channel account and runs ----------------------------------------------------------------
 
 
-def ensure_shopify_connection(session: Session) -> ChannelConnection:
-    """Create or update the store's single Shopify connection from settings.
+def ensure_shopify_account(session: Session) -> ChannelAccount:
+    """Create or update the seller's Shopify account (ecs_channel_accounts) from settings,
+    creating the SHOPIFY channel row if needed.
 
-    Phase 0 keeps credentials in env vars, so the *_ref columns name the variables.
+    One account per seller, channel and store domain. Phase 0 keeps credentials in env
+    vars, so the *_ref columns name the variables.
     """
     settings = get_settings()
     domain = normalize_store_domain(settings.shopify_store_domain)
@@ -140,18 +144,27 @@ def ensure_shopify_connection(session: Session) -> ChannelConnection:
     secret_env = (
         "SHOPIFY_WEBHOOK_SECRET" if settings.shopify_webhook_secret else "SHOPIFY_API_SECRET"
     )
-    statement = (
-        pg_insert(ChannelConnection)
+
+    session.execute(
+        pg_insert(Channel)
+        .values(code=SHOPIFY_CHANNEL_CODE, name="Shopify")
+        .on_conflict_do_nothing(index_elements=["code"])
+    )
+    channel_id = session.scalar(
+        select(Channel.channel_id).where(Channel.code == SHOPIFY_CHANNEL_CODE)
+    )
+    session.execute(
+        pg_insert(ChannelAccount)
         .values(
-            store_id=settings.store_id,
-            channel="shopify",
-            connection_name=clip(f"Shopify · {domain}", 100),
-            external_account_id=domain,
+            seller_id=settings.seller_id,
+            channel_id=channel_id,
+            account_name=clip(f"Shopify · {domain}", 100),
+            external_seller_id=domain,
             credential_ref=credential_ref,
             webhook_secret_ref=f"env:{secret_env}",
         )
         .on_conflict_do_update(
-            index_elements=["store_id", "channel", "external_account_id"],
+            index_elements=["seller_id", "channel_id", "external_seller_id"],
             set_={
                 "credential_ref": credential_ref,
                 "webhook_secret_ref": f"env:{secret_env}",
@@ -159,30 +172,27 @@ def ensure_shopify_connection(session: Session) -> ChannelConnection:
             },
         )
     )
-    session.execute(statement)
     return session.scalars(
-        select(ChannelConnection).where(
-            ChannelConnection.store_id == settings.store_id,
-            ChannelConnection.channel == "shopify",
-            ChannelConnection.external_account_id == domain,
+        select(ChannelAccount).where(
+            ChannelAccount.seller_id == settings.seller_id,
+            ChannelAccount.channel_id == channel_id,
+            ChannelAccount.external_seller_id == domain,
         )
     ).one()
 
 
-def start_import(
-    session: Session, channel_connection_id: int, ingestion_method: str
-) -> OrderImport:
-    """Create a pending import or sync run. One at a time per connection: raises
+def start_import(session: Session, channel_account_id: int, ingestion_method: str) -> OrderImport:
+    """Create a pending import or sync run. One at a time per account: raises
     ImportAlreadyRunning if another is active; a run with no progress for 30 minutes is
     marked failed. Webhook runs are independent and never block or are blocked."""
     session.execute(
-        select(ChannelConnection)
-        .where(ChannelConnection.channel_connection_id == channel_connection_id)
+        select(ChannelAccount)
+        .where(ChannelAccount.channel_account_id == channel_account_id)
         .with_for_update()
     ).scalar_one()
     running = session.scalars(
         select(OrderImport).where(
-            OrderImport.channel_connection_id == channel_connection_id,
+            OrderImport.channel_account_id == channel_account_id,
             OrderImport.status.in_(RUNNING_STATUSES),
             OrderImport.ingestion_method != "webhook",
         )
@@ -198,8 +208,8 @@ def start_import(
             raise ImportAlreadyRunning(run.order_import_id)
 
     run = OrderImport(
-        store_id=get_settings().store_id,
-        channel_connection_id=channel_connection_id,
+        seller_id=get_settings().seller_id,
+        channel_account_id=channel_account_id,
         channel="shopify",
         ingestion_method=ingestion_method,
     )
@@ -208,12 +218,12 @@ def start_import(
     return run
 
 
-def sync_start_time(session: Session, connection: ChannelConnection) -> datetime | None:
+def sync_start_time(session: Session, account: ChannelAccount) -> datetime | None:
     """Where a sync resumes: the saved cursor, else the newest order update we hold,
-    minus SYNC_OVERLAP. None (fetch everything) for a connection with no orders yet."""
-    resume_from = timestamp(connection.sync_cursor, [], "sync_cursor") or session.scalar(
+    minus SYNC_OVERLAP. None (fetch everything) for a account with no orders yet."""
+    resume_from = timestamp(account.sync_cursor, [], "sync_cursor") or session.scalar(
         select(func.max(OrderHeader.external_updated_at)).where(
-            OrderHeader.channel_connection_id == connection.channel_connection_id
+            OrderHeader.channel_account_id == account.channel_account_id
         )
     )
     return resume_from - SYNC_OVERLAP if resume_from else None
@@ -227,7 +237,7 @@ def run_shopify_order_import(
     session_factory: sessionmaker[Session] = SessionLocal,
 ) -> None:
     """Fetch Shopify orders (all of them, or those updated since `updated_at_min`) into
-    the run and process each one, then move the connection's sync cursor. Never raises:
+    the run and process each one, then move the account's sync cursor. Never raises:
     any failure ends up in the run's status and error_summary."""
     mark_processing(session_factory, order_import_id)
     params = {"status": "any"}
@@ -265,19 +275,19 @@ def run_shopify_order_import(
 def save_sync_progress(
     session_factory: sessionmaker[Session], order_import_id: int, newest_seen: datetime | None
 ) -> None:
-    """Record the outcome on the connection. A completed or partially completed run moves
+    """Record the outcome on the account. A completed or partially completed run moves
     the cursor (never backwards) and last_synced_at; its failed rows carry their errors."""
     with session_factory.begin() as session:
         run = session.get(OrderImport, order_import_id)
-        connection = session.get(ChannelConnection, run.channel_connection_id, with_for_update=True)
-        connection.last_sync_status = run.status
+        account = session.get(ChannelAccount, run.channel_account_id, with_for_update=True)
+        account.last_sync_status = run.status
         if run.status == "failed":  # fetch error, or every order failed: retry next time
             return
-        current = timestamp(connection.sync_cursor, [], "sync_cursor")
+        current = timestamp(account.sync_cursor, [], "sync_cursor")
         if newest_seen and (current is None or newest_seen > current):
-            connection.sync_cursor = newest_seen.astimezone(UTC).isoformat()  # always UTC
-        run.cursor_end = connection.sync_cursor
-        connection.last_synced_at = run.completed_at
+            account.sync_cursor = newest_seen.astimezone(UTC).isoformat()  # always UTC
+        run.cursor_end = account.sync_cursor
+        account.last_synced_at = run.completed_at
 
 
 def record_webhook_delivery(
@@ -287,12 +297,12 @@ def record_webhook_delivery(
 
     Returns (order_import_id, order_import_row_id), or None when this delivery id was
     already recorded (Shopify retried, or two deliveries raced): the unique
-    (channel_connection_id, external_event_id) constraint decides.
+    (channel_account_id, external_event_id) constraint decides.
     """
-    connection = ensure_shopify_connection(session)
+    account = ensure_shopify_account(session)
     run = OrderImport(
-        store_id=connection.store_id,
-        channel_connection_id=connection.channel_connection_id,
+        seller_id=account.seller_id,
+        channel_account_id=account.channel_account_id,
         channel="shopify",
         ingestion_method="webhook",
         external_event_id=clip(delivery_id, 150),
@@ -304,7 +314,7 @@ def record_webhook_delivery(
             session.flush()
     except IntegrityError as exc:
         constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", "")
-        if constraint == "uq_ecs_order_import_channel_connection_id_external_event_id":
+        if constraint == "uq_ecs_order_import_channel_account_id_external_event_id":
             return None
         raise
     return run.order_import_id, record_import_row(session, run.order_import_id, 1, payload)
@@ -446,7 +456,7 @@ def apply_order_row(session: Session, run: OrderImport, row: OrderImportRow) -> 
     header = session.scalars(
         select(OrderHeader)
         .where(
-            OrderHeader.store_id == run.store_id,
+            OrderHeader.seller_id == run.seller_id,
             OrderHeader.channel == run.channel,
             OrderHeader.external_order_id == mapped.external_order_id,
         )
@@ -493,9 +503,9 @@ def create_order(
     session: Session, run: OrderImport, row: OrderImportRow, mapped: MappedOrder
 ) -> OrderHeader:
     header = OrderHeader(
-        store_id=run.store_id,
+        seller_id=run.seller_id,
         channel=run.channel,
-        channel_connection_id=run.channel_connection_id,
+        channel_account_id=run.channel_account_id,
         external_order_id=mapped.external_order_id,
         ingestion_method=run.ingestion_method,
         created_by_import_id=run.order_import_id,
@@ -678,32 +688,30 @@ class SyncStart:
 
 
 def start_order_sync(session: Session, trigger: str) -> SyncStart:
-    """Start a sync run for the Shopify connection, in the caller's transaction.
+    """Start a sync run for the Shopify account, in the caller's transaction.
 
     `trigger` is "scheduled" or "manual". Scheduled calls are skipped until
     sync_interval_minutes have passed since the last successful sync, so the external
     scheduler can call more often than the interval; manual calls always run.
     """
-    connection = ensure_shopify_connection(session)
-    if not connection.sync_enabled:
+    account = ensure_shopify_account(session)
+    if not account.sync_enabled:
         return SyncStart("disabled")
-    if trigger == "scheduled" and connection.last_synced_at:
+    if trigger == "scheduled" and account.last_synced_at:
         # A minute's grace, so a scheduler running exactly every interval isn't skipped.
-        next_due_at = connection.last_synced_at + timedelta(
-            minutes=connection.sync_interval_minutes - 1
-        )
+        next_due_at = account.last_synced_at + timedelta(minutes=account.sync_interval_minutes - 1)
         if utcnow() < next_due_at:
             return SyncStart("not_due", next_due_at=next_due_at)
     try:
         run = start_import(
             session,
-            connection.channel_connection_id,
+            account.channel_account_id,
             "scheduled_sync" if trigger == "scheduled" else "manual_sync",
         )
     except ImportAlreadyRunning as exc:
         return SyncStart("already_running", run=session.get(OrderImport, exc.order_import_id))
-    updated_at_min = sync_start_time(session, connection)
-    run.cursor_start = connection.sync_cursor
+    updated_at_min = sync_start_time(session, account)
+    run.cursor_start = account.sync_cursor
     run.sync_from = updated_at_min
     run.sync_to = utcnow()
     return SyncStart("started", run=run, updated_at_min=updated_at_min)

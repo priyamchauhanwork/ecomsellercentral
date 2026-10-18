@@ -4,6 +4,7 @@ A seller's products (articles and their items) are stored once; each channel acc
 gets its own listings saying what is live there and under what name.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -31,6 +33,7 @@ ARTICLE_STATUSES = ("draft", "active", "archived")
 ITEM_STATUSES = ("active", "inactive")
 LISTING_STATUSES = ("draft", "live", "inactive", "rejected")
 LISTING_ITEM_STATUSES = ("live", "inactive")
+CONNECTION_STATUSES = ("active", "auth_expired", "disconnected", "error")
 
 EMPTY_LIST = text("'[]'::jsonb")
 EMPTY_OBJECT = text("'{}'::jsonb")
@@ -60,20 +63,43 @@ class Channel(TimestampMixin, Base):
 
 
 class ChannelAccount(TimestampMixin, Base):
-    """A seller's account on one channel."""
+    """A seller's account on one channel: used by catalog listings, and by order import,
+    sync and webhooks (the order ERD's "channel connection", merged into this table)."""
 
     __tablename__ = "ecs_channel_accounts"
     __table_args__ = (
         UniqueConstraint("seller_id", "account_name"),
+        # One account per marketplace account (e.g. per Shopify store domain).
+        UniqueConstraint("seller_id", "channel_id", "external_seller_id"),
         Index(None, "channel_id"),
+        CheckConstraint(
+            in_check("connection_status", CONNECTION_STATUSES), name="connection_status"
+        ),
+        CheckConstraint("sync_interval_minutes > 0", name="sync_interval_positive"),
     )
 
     channel_account_id: Mapped[int] = bigint_pk()
     seller_id: Mapped[int] = mapped_column(ForeignKey("ecs_sellers.seller_id"))
     channel_id: Mapped[int] = mapped_column(ForeignKey("ecs_channels.channel_id"))
     account_name: Mapped[str] = mapped_column(String(100))
+    # Seller id on the marketplace; for Shopify, the store domain.
     external_seller_id: Mapped[str | None] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+
+    # Order import, sync and webhooks (from the order ERD).
+    marketplace_region: Mapped[str | None] = mapped_column(String(30))
+    # Pointer to the credentials (Phase 0: env var names); secrets are never stored here.
+    credential_ref: Mapped[str | None] = mapped_column(String(255))
+    connection_status: Mapped[str] = mapped_column(String(20), server_default="active")
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, server_default="15")
+    sync_cursor: Mapped[str | None] = mapped_column(String(500))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_status: Mapped[str | None] = mapped_column(String(20))
+    webhook_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    webhook_secret_ref: Mapped[str | None] = mapped_column(String(255))
+    webhook_topics: Mapped[list[str] | None] = mapped_column(JSONB)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)  # FK once a users table exists
 
 
 class Article(TimestampMixin, Base):
