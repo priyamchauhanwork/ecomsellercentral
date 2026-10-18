@@ -695,6 +695,289 @@ a:hover {
   background: var(--danger-soft);
 }
 
+/* --- Products ------------------------------------------------------------------ */
+
+.page-header.spread {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.button.link-like {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.channel-chip {
+  padding: 1px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  border-radius: 999px;
+  color: var(--cancelled);
+  background: var(--cancelled-bg);
+}
+
+.channel-chip.live {
+  color: var(--delivered);
+  background: var(--delivered-bg);
+}
+
+.channel-chip.draft {
+  color: var(--pending);
+  background: var(--pending-bg);
+}
+
+.badge-active,
+.badge-live,
+.channel-live,
+.stock-ok {
+  color: var(--delivered);
+  background: var(--delivered-bg);
+}
+
+.badge-draft,
+.channel-draft,
+.stock-low {
+  color: var(--pending);
+  background: var(--pending-bg);
+}
+
+.badge-archived,
+.badge-inactive,
+.channel-inactive,
+.channel-rejected {
+  color: var(--cancelled);
+  background: var(--cancelled-bg);
+}
+
+.stock-out {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.select-cell {
+  width: 36px;
+}
+
+.select-cell input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: var(--primary-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.section-title {
+  margin: 8px 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.channel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.channel-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.switch-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  padding: 0;
+  vertical-align: middle;
+  background: var(--border-strong);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.switch.on {
+  background: var(--primary);
+}
+
+.switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.switch.busy {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(27, 42, 65, 0.25);
+  transition: transform 0.15s;
+}
+
+.switch.on .switch-knob {
+  transform: translateX(18px);
+}
+
+.gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gallery li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 88px;
+}
+
+.details .contents {
+  display: contents;
+}
+
+.data-table.compact td,
+.data-table.compact th {
+  padding: 8px 10px;
+}
+
+.confirm-panel.wide {
+  max-width: none;
+}
+
+.price-input {
+  width: 110px;
+  height: 32px;
+  padding: 0 8px;
+  font: inherit;
+  text-align: right;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* New product form */
+
+.product-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+}
+
+.form-grid h2,
+.form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.form-grid textarea,
+.field textarea {
+  min-height: 72px;
+}
+
+.option-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.option-row .field.wide {
+  flex: 1;
+  min-width: 220px;
+}
+
+.option-row .link-button {
+  height: 36px;
+}
+
+.card > .button.secondary {
+  margin-top: 4px;
+}
+
+.variant-grid input {
+  width: 100%;
+  min-width: 90px;
+  height: 32px;
+  padding: 0 8px;
+  font: inherit;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.variant-grid tr.removed td {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.variant-grid tr.removed input {
+  opacity: 0.5;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* --- Small screens: the side bar becomes a strip under the top bar ---------------- */
 
 @media (max-width: 768px) {

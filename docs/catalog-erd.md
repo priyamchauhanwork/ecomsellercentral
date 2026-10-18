@@ -203,3 +203,13 @@ Choices made where the ERD left details open (PostgreSQL 18):
 - **Orders:** afterwards, unlinked `ecs_order_line` rows get `variant_id` / `product_id` from the Shopify variant id in their latest payload, else from the SKU. New orders and items added by order edits are linked by the order processing step as they arrive.
 - Requires the Shopify `read_products` scope (503 otherwise).
 
+## Products in the app (#43–#47)
+
+- **Statuses.** `ecs_channel_listings.status` says whether the *product* is on sale on that channel account; `ecs_channel_listing_items.status` says whether that *SKU* is enabled there. A SKU is actually sold only when both are `live`. Taking a product off sale keeps each SKU's own state, so it comes back as it was.
+- **List and detail** (`GET /products`, `GET /products/{id}`): `channel_status` filter — `live` (has a live listing), `inactive` (listed, none live), `unlisted`; low stock means an active item at or below 5.
+- **Create** (`POST /products`): saved as `draft` with `stock_baseline_at` = now. Article code and SKUs are unique per seller ignoring case; ERD rules 1–2 are checked; every problem is returned with its field. At most 100 variants. Images are https URLs (no uploads: Render's disk is ephemeral).
+- **Publish** (`POST /products/{id}/publish`): one `productSet` call creates the product with its options, variants (price, compare-at from MRP when higher, barcode, weight, tracked stock at the primary location, overselling off) and images, as `DRAFT` or, with `enable`, `ACTIVE` and published to the Online Store. The handle is fixed per article (`<code>-<article id>`), so a retry updates the same Shopify product instead of creating a second one, and it can't collide with an existing product's handle. The article becomes `active`. Refused when already listed (409), archived, over 3 options, or without a price for an active item (422).
+- **Enable / disable** (`.../listings/{id}/status`, `.../listing-items/{id}/status`, bulk `POST /products/status`): Shopify first — the local status changes only after Shopify accepted; a failure is stored in the listing items' `last_sync_error` (cleared by the next success) and nothing changes locally. Product: `ACTIVE` + Online Store, or `DRAFT` (hidden from every sales channel). SKU: Shopify can't hide one variant, so disabling makes it sold out (stock tracked, overselling off, quantity 0) and enabling sets the quantity back to `stock_qty`.
+- **Import and app-disabled SKUs.** The product import keeps a SKU disabled while Shopify still shows it sold out that way; if someone restocks it in Shopify, Shopify wins and it is enabled again.
+- **Shopify scopes** for publishing and enable / disable: `write_products`, `write_inventory`, `write_publications`.
+

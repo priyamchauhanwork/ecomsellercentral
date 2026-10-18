@@ -2,6 +2,9 @@ import { Route, Routes } from "react-router-dom";
 import AppLayout from "./layout/AppLayout";
 import OrderDetailPage from "./pages/OrderDetailPage";
 import OrdersPage from "./pages/OrdersPage";
+import ProductCreatePage from "./pages/ProductCreatePage";
+import ProductDetailPage from "./pages/ProductDetailPage";
+import ProductsPage from "./pages/ProductsPage";
 import Placeholder from "./pages/Placeholder";
 
 export default function App() {
@@ -11,6 +14,9 @@ export default function App() {
         <Route index element={<Placeholder title="Dashboard" ticket="#24 (dashboard)" />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/:orderId" element={<OrderDetailPage />} />
+        <Route path="products" element={<ProductsPage />} />
+        <Route path="products/new" element={<ProductCreatePage />} />
+        <Route path="products/:productId" element={<ProductDetailPage />} />
         <Route path="inventory" element={<Placeholder title="Inventory" ticket="#22 (inventory list)" />} />
         <Route
           path="*"

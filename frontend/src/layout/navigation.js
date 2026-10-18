@@ -21,6 +21,18 @@ export const SECTIONS = [
     ],
   },
   {
+    label: "Products",
+    path: "/products",
+    links: [
+      { label: "All products", to: "/products" },
+      { label: "Active", to: "/products?status=active" },
+      { label: "Draft", to: "/products?status=draft" },
+      { label: "Archived", to: "/products?status=archived" },
+      { label: "Low stock", to: "/products?low=true" },
+      { label: "New product", to: "/products/new" },
+    ],
+  },
+  {
     label: "Inventory",
     path: "/inventory",
     links: [

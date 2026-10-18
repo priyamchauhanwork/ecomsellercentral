@@ -1,9 +1,10 @@
 import { API_KEY, API_URL } from "./config";
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, detail = null) {
     super(message);
     this.status = status;
+    this.detail = detail; // FastAPI's `detail`: a list of field errors for 422s
   }
 }
 
@@ -41,6 +42,8 @@ export async function api(path, { params, signal, method = "GET", body } = {}) {
     throw new ApiError(`Can't reach the server at ${API_URL}. Is the backend running?`, 0);
   }
   const data = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(describeError(data, response.status), response.status);
+  if (!response.ok) {
+    throw new ApiError(describeError(data, response.status), response.status, data?.detail ?? null);
+  }
   return data;
 }

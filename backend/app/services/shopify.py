@@ -224,7 +224,15 @@ class ShopifyClient:
         )
         payload = response.json()
         if payload.get("errors"):
-            raise ShopifyError(f"Shopify GraphQL error: {payload['errors']}", response.status_code)
+            messages = (
+                "; ".join(
+                    str(error.get("message", error)) if isinstance(error, dict) else str(error)
+                    for error in payload["errors"]
+                )
+                if isinstance(payload["errors"], list)
+                else str(payload["errors"])
+            )
+            raise ShopifyError(f"Shopify GraphQL error: {messages}", response.status_code)
         return payload["data"]
 
     @staticmethod
