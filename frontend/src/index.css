@@ -615,6 +615,61 @@ a:hover {
   }
 }
 
+/* --- Status change ------------------------------------------------------------ */
+
+.confirm-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  background: var(--primary-faint);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.confirm-panel p {
+  margin: 0;
+}
+
+.field textarea {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  resize: vertical;
+}
+
+.field textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.form-error {
+  color: var(--danger);
+}
+
+.notice {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+}
+
+.notice.success {
+  color: var(--delivered);
+  background: var(--delivered-bg);
+}
+
+.notice.error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 /* --- Small screens: the side bar becomes a strip under the top bar ---------------- */
 
 @media (max-width: 768px) {

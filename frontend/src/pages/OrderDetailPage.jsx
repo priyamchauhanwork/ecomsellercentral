@@ -4,10 +4,11 @@ import { api } from "../api";
 import { EmptyState, ErrorMessage, Loading } from "../components/Feedback";
 import { capitalize, formatDateTime, formatMoney } from "../format";
 import { describeChange, describeSource } from "../orders/history";
+import StatusChangePanel from "../orders/StatusChangePanel";
+import { NEXT_STATUS } from "../orders/status";
 
-// Shown now so the layout is final; each is wired by its own ticket.
-const ACTIONS = [
-  { label: "Mark shipped", ticket: "#18" },
+// Document buttons, shown now so the layout is final; each is wired by its own ticket.
+const DOCUMENT_ACTIONS = [
   { label: "Invoice", ticket: "#25" },
   { label: "Packing slip", ticket: "#26" },
   { label: "Label", ticket: "#27" },
@@ -74,6 +75,16 @@ export default function OrderDetailPage() {
   const [result, setResult] = useState({ key: null, order: null, error: null });
   const requestKey = `${orderId}:${reloads}`;
   const loading = validId && result.key !== requestKey;
+  const [confirming, setConfirming] = useState(false);
+  const [notice, setNotice] = useState(null); // { text, tone: "success" | "error" }
+
+  // Opening another order starts without a pending confirmation or old message.
+  const [shownOrderId, setShownOrderId] = useState(orderId);
+  if (shownOrderId !== orderId) {
+    setShownOrderId(orderId);
+    setConfirming(false);
+    setNotice(null);
+  }
 
   useEffect(() => {
     if (!validId) return undefined;
@@ -122,6 +133,7 @@ export default function OrderDetailPage() {
   }
 
   const { order } = result;
+  const nextStatus = NEXT_STATUS[order.order_status];
   const money = (amount) => formatMoney(amount, order.currency);
   const lines = [...order.lines].sort((a, b) => a.line_number - b.line_number);
 
@@ -142,7 +154,20 @@ export default function OrderDetailPage() {
           </p>
         </div>
         <div className="actions" role="group" aria-label="Order actions">
-          {ACTIONS.map((action) => (
+          {nextStatus && (
+            <button
+              type="button"
+              className="button"
+              disabled={confirming}
+              onClick={() => {
+                setNotice(null);
+                setConfirming(true);
+              }}
+            >
+              {nextStatus.label}
+            </button>
+          )}
+          {DOCUMENT_ACTIONS.map((action) => (
             <button
               key={action.label}
               type="button"
@@ -155,6 +180,30 @@ export default function OrderDetailPage() {
           ))}
         </div>
       </div>
+
+      {confirming && nextStatus && (
+        <StatusChangePanel
+          order={order}
+          change={nextStatus}
+          onCancel={() => setConfirming(false)}
+          onSaved={(updated) => {
+            // The API returns the updated order: status, lines and timeline refresh in place.
+            setResult({ key: requestKey, order: updated, error: null });
+            setConfirming(false);
+            setNotice({ text: `Order marked as ${updated.order_status}.`, tone: "success" });
+          }}
+          onConflict={(message) => {
+            setConfirming(false);
+            setNotice({ text: `${message} The order has been reloaded.`, tone: "error" });
+            setReloads((n) => n + 1);
+          }}
+        />
+      )}
+      {notice && (
+        <p className={`notice ${notice.tone}`} role="status">
+          {notice.text}
+        </p>
+      )}
 
       <div className="detail-grid">
         <div className="card">

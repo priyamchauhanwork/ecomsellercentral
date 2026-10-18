@@ -232,13 +232,14 @@ describe("Order detail", () => {
     expect(screen.getByText("Subtotal").closest("dl")).toHaveTextContent("Total$2,949.00");
   });
 
-  it("shows the action buttons, disabled until their tickets", async () => {
+  it("shows the document buttons, disabled until their tickets", async () => {
     mockApi(respond(ORDER));
     renderAt("/orders/10");
     const actions = await screen.findByRole("group", { name: "Order actions" });
-    for (const name of ["Mark shipped", "Invoice", "Packing slip", "Label"]) {
+    for (const name of ["Invoice", "Packing slip", "Label"]) {
       expect(within(actions).getByRole("button", { name })).toBeDisabled();
     }
+    expect(within(actions).getByRole("button", { name: "Mark shipped" })).toBeEnabled();
   });
 
   it("says when the order doesn't exist", async () => {
@@ -280,5 +281,150 @@ describe("Order detail", () => {
       "href",
       "/orders",
     );
+  });
+});
+
+// --- Mark shipped / delivered (#18) ------------------------------------------------------
+
+const SHIPPED = {
+  ...ORDER,
+  order_status: "shipped",
+  version_no: 3,
+  lines: ORDER.lines.map((line) => ({ ...line, line_status: "shipped" })),
+  history: [
+    ...ORDER.history.slice(0, 1),
+    { order_history_id: 3, version_no: 3, action_type: "status_change", old_status: "pending",
+      new_status: "shipped", changed_fields: {}, change_source: "admin_ui",
+      order_import_id: null, remarks: "Courier at 4 pm", changed_at: "2026-10-18T09:00:00Z" },
+  ],
+};
+const PENDING = { ...ORDER, history: ORDER.history.slice(0, 1) };
+
+function postedBody(fetchMock) {
+  const [url, options] = fetchMock.mock.calls.at(-1);
+  expect(new URL(url).pathname).toBe("/orders/10/status");
+  expect(options.method).toBe("POST");
+  return JSON.parse(options.body);
+}
+
+describe("Mark shipped", () => {
+  it("confirms in the page, saves, and refreshes status, items and timeline in place", async () => {
+    const fetchMock = mockApi(respond(PENDING), respond(SHIPPED));
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+
+    const panel = screen.getByRole("form", { name: "Mark shipped confirmation" });
+    expect(panel).toHaveTextContent("2 items will be marked shipped");
+    expect(panel).toHaveTextContent("Shopify isn't changed");
+    expect(within(panel).getByRole("button", { name: "Yes, mark shipped" })).toHaveFocus();
+
+    await userEvent.type(within(panel).getByLabelText(/Note for the timeline/), "Courier at 4 pm");
+    await userEvent.click(within(panel).getByRole("button", { name: "Yes, mark shipped" }));
+
+    expect(await screen.findByText("Order marked as shipped.")).toBeInTheDocument();
+    expect(postedBody(fetchMock)).toEqual({ status: "shipped", remarks: "Courier at 4 pm" });
+    expect(fetchMock).toHaveBeenCalledTimes(2); // no reload needed
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Order #1001/ })).toHaveTextContent("Shipped");
+    const timeline = screen.getByRole("heading", { name: "Timeline" }).parentElement;
+    expect(within(timeline).getAllByRole("listitem").at(-1)).toHaveTextContent(
+      "Status changed from Pending to Shipped",
+    );
+    // Once shipped, the next step is delivery.
+    expect(screen.queryByRole("button", { name: "Mark shipped" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Mark delivered" })).toBeEnabled();
+  });
+
+  it("sends no note when the note is blank", async () => {
+    const fetchMock = mockApi(respond(PENDING), respond(SHIPPED));
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+    await userEvent.type(screen.getByLabelText(/Note for the timeline/), "   ");
+    await userEvent.click(screen.getByRole("button", { name: "Yes, mark shipped" }));
+    await screen.findByText("Order marked as shipped.");
+    expect(postedBody(fetchMock)).toEqual({ status: "shipped", remarks: null });
+  });
+
+  it("can be cancelled with the button or Escape, without saving", async () => {
+    const fetchMock = mockApi(respond(PENDING));
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+    expect(screen.getByRole("button", { name: "Mark shipped" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Mark shipped" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // only the page load
+  });
+
+  it("disables the panel while saving, so a double click can't send twice", async () => {
+    let finish;
+    const fetchMock = mockApi(
+      respond(PENDING),
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, mark shipped" }));
+
+    expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Saving…" }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    finish(new Response(JSON.stringify(SHIPPED)));
+    expect(await screen.findByText("Order marked as shipped.")).toBeInTheDocument();
+  });
+
+  it("keeps the panel open with the error when saving fails, and allows another try", async () => {
+    mockApi(
+      respond(PENDING),
+      respond({ detail: "Database unavailable" }, 503),
+      respond(SHIPPED),
+    );
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, mark shipped" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Database unavailable");
+    await userEvent.click(screen.getByRole("button", { name: "Yes, mark shipped" }));
+    expect(await screen.findByText("Order marked as shipped.")).toBeInTheDocument();
+  });
+
+  it("reloads the order when it changed meanwhile (409)", async () => {
+    const cancelled = { ...PENDING, order_status: "cancelled" };
+    const fetchMock = mockApi(
+      respond(PENDING),
+      respond({ detail: "An order that is cancelled can't be marked shipped." }, 409),
+      respond(cancelled),
+    );
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, mark shipped" }));
+
+    expect(await screen.findByText(/can't be marked shipped. The order has been reloaded./))
+      .toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("heading", { name: /Order #1001/ })).toHaveTextContent("Cancelled");
+    expect(screen.queryByRole("button", { name: /^Mark/ })).not.toBeInTheDocument();
+  });
+
+  it("doesn't count cancelled items as being shipped", async () => {
+    const lines = [{ ...LINE, line_status: "cancelled" }, { ...LINE, order_line_id: 2, line_number: 2 }];
+    mockApi(respond({ ...PENDING, lines }));
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark shipped" }));
+    expect(screen.getByRole("form")).toHaveTextContent("1 item will be marked shipped");
+  });
+
+  it.each(["delivered", "cancelled"])("offers no status change for a %s order", async (status) => {
+    mockApi(respond({ ...PENDING, order_status: status }));
+    renderAt("/orders/10");
+    await screen.findByRole("heading", { name: /Order #1001/ });
+    expect(screen.queryByRole("button", { name: /^Mark/ })).not.toBeInTheDocument();
   });
 });
