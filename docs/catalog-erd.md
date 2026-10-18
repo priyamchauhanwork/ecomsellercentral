@@ -183,3 +183,23 @@ Choices made where the ERD left details open (PostgreSQL 18):
 - **Orders belong to sellers.** `ecs_order_header.seller_id` and `ecs_order_import.seller_id` (formerly `store_id`) are foreign keys to `ecs_sellers`; `channel_account_id` (formerly `channel_connection_id`) points at `ecs_channel_accounts`. The migration created seller 1, "Default seller", for the existing Phase 0 data; the app uses `SELLER_ID` (default 1).
 - **Order lines link to the catalog.** `ecs_order_line.product_id` → `ecs_articles`, `variant_id` → `ecs_items` (foreign keys, empty until the product import, #13, links them).
 - The `SHOPIFY` row in `ecs_channels` is created by the app when it first connects the store.
+
+## Shopify product import (#13)
+
+`POST /products/import` (`backend/app/services/product_import.py`) fills the catalog from the seller's Shopify store; `GET /products` lists the items.
+
+| Shopify | Catalog |
+| --- | --- |
+| Product | `ecs_articles`: `article_code` = handle on first import (`shopify-<product id>` if the handle is taken; never changed later), `name`, `description` = body, `brand` = vendor, `category` = product type, `variation_axes` = option names (`[]` for Shopify's single "Default Title" option), `images` (an image tied to variants gets the option values they share as its `filter`), `status` = active / draft / archived |
+| Product on the store | `ecs_channel_listings` on the Shopify account: `split_key = {}`, `channel_parent_id` = product id, `title` / `description` NULL, `status` = `live` (active and published), `draft`, or `inactive` |
+| Variant | `ecs_items`: `sku` (`shopify-<variant id>` when blank or already used by another item, with a warning), `barcode`, `variant_values`, `mrp` = compare-at price when above the price, else the price, `weight` in grams (from `grams`, or `weight` + unit) |
+| Variant on the store | `ecs_channel_listing_items`: `channel_item_id` = variant id, `channel_sku`, `selling_price` = price, `status` = `live` when the listing is live |
+
+- **Matching on re-import** is by Shopify id (`channel_parent_id`, `channel_item_id`; both indexed), never by name or SKU: renames update, a variant moved to another product moves its item.
+- **Stock** (`stock_qty`) is copied from Shopify's inventory quantity only when an item is created, and `ecs_items.stock_baseline_at` records when (#21 deducts only orders placed after it). Re-imports never overwrite stock. Untracked and negative quantities are kept as Shopify reports them; the summary counts untracked ones.
+- **Removed in Shopify:** a variant's listing item becomes `inactive`; a product's listing becomes `inactive` and its article `archived`. Nothing is deleted. This happens only when every page was fetched, so a Shopify error midway never deactivates products.
+- **Invalid products** (repeated option values, blank option names, missing ids) are skipped with an error in the summary; the rest import. Each product is its own transaction.
+- **One import at a time** per account (PostgreSQL advisory lock); a second call gets 409.
+- **Orders:** afterwards, unlinked `ecs_order_line` rows get `variant_id` / `product_id` from the Shopify variant id in their latest payload, else from the SKU. New orders and items added by order edits are linked by the order processing step as they arrive.
+- Requires the Shopify `read_products` scope (503 otherwise).
+

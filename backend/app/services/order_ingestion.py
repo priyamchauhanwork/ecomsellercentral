@@ -41,6 +41,7 @@ from app.services.order_mapping import (
     order_status_from_lines,
     timestamp,
 )
+from app.services.product_import import link_line
 from app.services.shopify import (
     ShopifyClient,
     ShopifyConfigError,
@@ -519,6 +520,8 @@ def create_order(
     header.lines = [OrderLine(version_no=1, **line) for line in mapped.lines]
     session.add(header)
     session.flush()
+    for line in header.lines:  # link to the catalog when the products are imported (#13)
+        link_line(session, run.channel_account_id, run.seller_id, line, row.raw_payload)
 
     session.add(
         OrderHistory(
@@ -596,6 +599,7 @@ def update_order(
             line = OrderLine(version_no=1, **{**values, "line_number": next_number})
             next_number += 1
             header.lines.append(line)
+            link_line(session, run.channel_account_id, run.seller_id, line, row.raw_payload)
             new_lines.append(line)
             line_diffs[f"line {line.line_number}"] = "added"
             continue

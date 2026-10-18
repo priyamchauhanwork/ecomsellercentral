@@ -157,6 +157,9 @@ class Item(TimestampMixin, Base):
     mrp: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     # Single stock figure in the MVP. May go negative when an order oversells (#21).
     stock_qty: Mapped[int] = mapped_column(Integer, server_default="0")
+    # When stock_qty was last copied from a channel (#13); orders placed before it are
+    # already reflected in it, so #21 doesn't deduct them. Extension of the catalog ERD.
+    stock_baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     weight: Mapped[Decimal | None] = mapped_column(Numeric(10, 3))  # grams
     status: Mapped[str] = mapped_column(String(20), server_default="active")
 
@@ -171,7 +174,8 @@ class ChannelListing(TimestampMixin, Base):
         UniqueConstraint("article_id", "channel_account_id", "split_key"),
         # Target of ecs_channel_listing_items' composite foreign key.
         UniqueConstraint("listing_id", "channel_account_id"),
-        Index(None, "channel_account_id"),
+        # Finding a listing by the channel's product id (re-imports).
+        Index(None, "channel_account_id", "channel_parent_id"),
         CheckConstraint(in_check("status", LISTING_STATUSES), name="status"),
     )
 
@@ -204,6 +208,8 @@ class ChannelListingItem(TimestampMixin, Base):
             name="fk_ecs_channel_listing_items_listing_account",
         ),
         Index(None, "listing_id"),
+        # Finding a listing item by the channel's variant id (re-imports, order linking).
+        Index(None, "channel_account_id", "channel_item_id"),
         CheckConstraint(in_check("status", LISTING_ITEM_STATUSES), name="status"),
         CheckConstraint(
             "selling_price IS NULL OR selling_price >= 0", name="selling_price_non_negative"
