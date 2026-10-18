@@ -352,7 +352,8 @@ def test_abandoned_run_is_failed_and_a_new_one_starts():
 
 def test_processing_a_row_twice_does_nothing_the_second_time():
     run_id = new_run()
-    row_id = ingestion.record_import_row(SessionLocal, run_id, 1, shopify_order())
+    with SessionLocal.begin() as session:
+        row_id = ingestion.record_import_row(session, run_id, 1, shopify_order())
     assert ingestion.process_import_row(row_id) == "created"
     assert ingestion.process_import_row(row_id) == "created"
     with SessionLocal() as session:
@@ -364,9 +365,10 @@ def test_concurrently_created_order_is_retried_as_an_update(monkeypatch):
     """Simulate a webhook creating the same order between our lookup and our insert."""
     import_orders([shopify_order()])
     run_id = new_run()
-    row_id = ingestion.record_import_row(
-        SessionLocal, run_id, 1, shopify_order(updated_at="2026-10-18T09:00:00+05:30", note="x")
-    )
+    with SessionLocal.begin() as session:
+        row_id = ingestion.record_import_row(
+            session, run_id, 1, shopify_order(updated_at="2026-10-18T09:00:00+05:30", note="x")
+        )
     original = ingestion.apply_order_row
     calls = {"n": 0}
 

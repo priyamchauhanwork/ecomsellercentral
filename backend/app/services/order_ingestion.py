@@ -168,8 +168,9 @@ def ensure_shopify_connection(session: Session) -> ChannelConnection:
 def start_import(
     session: Session, channel_connection_id: int, ingestion_method: str
 ) -> OrderImport:
-    """Create a pending run. One run at a time per connection: raises ImportAlreadyRunning
-    if another is active; a run with no progress for 30 minutes is marked failed."""
+    """Create a pending import or sync run. One at a time per connection: raises
+    ImportAlreadyRunning if another is active; a run with no progress for 30 minutes is
+    marked failed. Webhook runs are independent and never block or are blocked."""
     session.execute(
         select(ChannelConnection)
         .where(ChannelConnection.channel_connection_id == channel_connection_id)
@@ -179,6 +180,7 @@ def start_import(
         select(OrderImport).where(
             OrderImport.channel_connection_id == channel_connection_id,
             OrderImport.status.in_(RUNNING_STATUSES),
+            OrderImport.ingestion_method != "webhook",
         )
     ).all()
     for run in running:
@@ -210,17 +212,14 @@ def run_shopify_order_import(
 ) -> None:
     """Fetch every Shopify order into the run and process each one. Never raises: any
     failure ends up in the run's status and error_summary."""
-    with session_factory.begin() as session:
-        run = session.get(OrderImport, order_import_id)
-        run.status = "processing"
-        run.started_at = utcnow()
-
+    mark_processing(session_factory, order_import_id)
     fetch_error: str | None = None
     try:
         with (client_factory or shopify_client_factory)() as shopify:
             orders = shopify.paginate("/orders.json", "orders", {"status": "any"})
             for record_number, payload in enumerate(orders, 1):
-                row_id = record_import_row(session_factory, order_import_id, record_number, payload)
+                with session_factory.begin() as session:
+                    row_id = record_import_row(session, order_import_id, record_number, payload)
                 process_import_row(row_id, session_factory=session_factory)
     except ShopifyError as exc:
         fetch_error = f"Shopify request failed: {exc}. {exc.body[:300]}"
@@ -237,29 +236,75 @@ def run_shopify_order_import(
     finish_import(session_factory, order_import_id, fetch_error)
 
 
+def record_webhook_delivery(
+    session: Session, topic: str, delivery_id: str | None, payload: Any
+) -> tuple[int, int] | None:
+    """Record a webhook delivery as a run with one row, in the caller's transaction.
+
+    Returns (order_import_id, order_import_row_id), or None when this delivery id was
+    already recorded (Shopify retried, or two deliveries raced): the unique
+    (channel_connection_id, external_event_id) constraint decides.
+    """
+    connection = ensure_shopify_connection(session)
+    run = OrderImport(
+        store_id=connection.store_id,
+        channel_connection_id=connection.channel_connection_id,
+        channel="shopify",
+        ingestion_method="webhook",
+        external_event_id=clip(delivery_id, 150),
+        event_topic=clip(topic, 50),
+    )
+    try:
+        with session.begin_nested():
+            session.add(run)
+            session.flush()
+    except IntegrityError as exc:
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", "")
+        if constraint == "uq_ecs_order_import_channel_connection_id_external_event_id":
+            return None
+        raise
+    return run.order_import_id, record_import_row(session, run.order_import_id, 1, payload)
+
+
+def run_webhook_import(
+    order_import_id: int, row_id: int, *, session_factory: sessionmaker[Session] = SessionLocal
+) -> None:
+    """Process a recorded webhook delivery (one row) and close its run."""
+    mark_processing(session_factory, order_import_id)
+    process_import_row(row_id, session_factory=session_factory)
+    finish_import(session_factory, order_import_id, None)
+
+
+def mark_processing(session_factory: sessionmaker[Session], order_import_id: int) -> None:
+    with session_factory.begin() as session:
+        run = session.get(OrderImport, order_import_id)
+        run.status = "processing"
+        run.started_at = utcnow()
+
+
 def record_import_row(
-    session_factory: sessionmaker[Session], order_import_id: int, record_number: int, payload: Any
+    session: Session, order_import_id: int, record_number: int, payload: Any
 ) -> int:
-    """Store one received order exactly as received, before any processing."""
+    """Store one received order exactly as received, before any processing. Runs in the
+    caller's transaction."""
     payload = clean_payload(payload)
     order = payload if isinstance(payload, dict) else {}
-    with session_factory.begin() as session:
-        row = OrderImportRow(
-            order_import_id=order_import_id,
-            record_number=record_number,
-            external_order_id=clip(order.get("id"), 100),
-            external_updated_at=timestamp(order.get("updated_at"), [], "updated_at"),
-            raw_payload=payload,
-            payload_hash=payload_hash(payload),
-        )
-        session.add(row)
-        session.flush()
-        session.execute(
-            update(OrderImport)
-            .where(OrderImport.order_import_id == order_import_id)
-            .values(total_records=OrderImport.total_records + 1)
-        )
-        return row.order_import_row_id
+    row = OrderImportRow(
+        order_import_id=order_import_id,
+        record_number=record_number,
+        external_order_id=clip(order.get("id"), 100),
+        external_updated_at=timestamp(order.get("updated_at"), [], "updated_at"),
+        raw_payload=payload,
+        payload_hash=payload_hash(payload),
+    )
+    session.add(row)
+    session.flush()
+    session.execute(
+        update(OrderImport)
+        .where(OrderImport.order_import_id == order_import_id)
+        .values(total_records=OrderImport.total_records + 1)
+    )
+    return row.order_import_row_id
 
 
 def finish_import(

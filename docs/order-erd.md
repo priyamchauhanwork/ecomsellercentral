@@ -448,6 +448,16 @@ Header amounts are Shopify's own totals (they include shipping), not re-added fr
 
 **Shopify app requirements.** Scopes `read_orders` (and `read_all_orders` for older orders), plus **protected customer data access** for name, email, phone and address; without it Shopify answers 403 to every order request.
 
+## Shopify webhooks (#11)
+
+`POST /webhooks/orders` (`backend/app/routers/webhooks.py`), registered with `uv run python -m scripts.register_webhooks <https URL>` (`--remove` to delete).
+
+1. **Signature.** The raw body is signed with base64 HMAC-SHA256 using `SHOPIFY_WEBHOOK_SECRET`, or `SHOPIFY_API_SECRET` when that is empty (Dev Dashboard apps sign with the client secret). Missing or wrong signature → 401, nothing stored. No secret configured → 503, so Shopify retries later.
+2. **Filtering.** Topics with a full order payload are processed: `orders/create`, `orders/updated`, `orders/cancelled`, `orders/fulfilled`, `orders/partially_fulfilled`, `orders/paid`. Any other topic, or a delivery for a different store, is answered 200 and ignored so Shopify stops retrying. A body that isn't JSON → 400.
+3. **Recording.** The run (`ingestion_method = webhook`, `event_topic`, `external_event_id` = `X-Shopify-Webhook-Id`) and its one import row are saved in one transaction. A repeated delivery id hits the unique `(channel_connection_id, external_event_id)` constraint and is answered `{"status": "duplicate"}` without processing, even when two deliveries race.
+4. **Answer, then process.** The response goes back immediately; the shared processing step runs in the background, and the run ends `completed` or `failed`. An order that can't be mapped is still answered 200 (it is stored, and retrying wouldn't fix it) and recorded as a failed row.
+5. Webhook runs never block, and are never blocked by, an import or sync run.
+
 ## Manual status changes (#10)
 
 `POST /orders/{id}/status` with `{"status": ..., "remarks": ...}` (`backend/app/services/order_status.py`).

@@ -220,6 +220,7 @@ uv run pytest                                    # run the tests (in a separate 
 uv run ruff check . && uv run ruff format .      # lint and format
 uv run python -m scripts.check_shopify           # test the Shopify connection (needs the Shopify values in .env)
 uv run python -m scripts.connect_shopify         # create the store's Shopify connection row (once per database)
+uv run python -m scripts.register_webhooks <url> # point Shopify's order webhooks at a public https URL (--remove to delete)
 ```
 
 To run migrations against **Render** from your laptop, override `DATABASE_URL` for one command:

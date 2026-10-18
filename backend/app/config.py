@@ -53,6 +53,12 @@ class Settings(BaseSettings):
         return self.environment == "production"
 
     @property
+    def shopify_webhook_signing_secret(self) -> str:
+        """Dev Dashboard apps sign webhooks with the client secret; an explicit
+        SHOPIFY_WEBHOOK_SECRET overrides it."""
+        return self.shopify_webhook_secret or self.shopify_api_secret
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
