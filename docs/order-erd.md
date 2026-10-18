@@ -304,8 +304,8 @@ All four methods end in the same processing step, so CSV, sync and webhook order
 
 1. For each `ecs_order_import_row`, look up `ecs_order_header` by `(store_id, channel, external_order_id)`.
 2. Not found → validate and create the header and lines. Set `ingestion_method`, `created_by_import_id` and `last_import_id`. Write a `created` history record. `action_taken = created`.
-3. Found, but the record's `external_updated_at` is older than or equal to the header's → `action_taken = skipped_stale`, no change.
-4. Found, `payload_hash` matches the last applied record → `action_taken = unchanged`.
+3. Found, `payload_hash` matches the last record we are consistent with (the newest `created`, `updated` or `unchanged` row for that order) → `action_taken = unchanged`. Checked before staleness, so re-importing identical data reports `unchanged`.
+4. Found, but the record's `external_updated_at` is older than or equal to the header's → `action_taken = skipped_stale`, no change.
 5. Found and newer → update the changed columns, increase `version_no`, set `last_import_id`, `last_ingestion_method`, `external_updated_at` and `last_synced_at`, and write history with `change_source` and the import IDs. `action_taken = updated`.
 6. Fill `order_header_id` on the import row and update the run's counters.
 
@@ -395,3 +395,55 @@ Choices made where the ERD left details open (PostgreSQL 18):
 - **`order_number` is unique across all stores**, as specified. When Phase 1 adds multiple stores, change it to unique per `(store_id, order_number)`; two Shopify stores can both have `#1001`.
 - **`updated_at`** is refreshed by the ORM on every update. Raw SQL updates must set it themselves.
 - **Deletes are restricted.** No foreign key cascades: orders are soft-deleted (`is_deleted`), and history must never disappear with its parent.
+
+## Shopify mapping (#9)
+
+Implemented in `backend/app/services/order_mapping.py` (`map_shopify_order()`), shared by the import, webhooks and polling. Processing is in `backend/app/services/order_ingestion.py`.
+
+**Header**
+
+| Column | Shopify order field |
+| --- | --- |
+| `external_order_id` | `id` |
+| `order_number` | `name` (e.g. `#1001`), else `#` + `order_number`, else `id` |
+| `order_date` / `external_updated_at` | `created_at` / `updated_at` (stored in UTC) |
+| `customer_name` | customer first + last name, else the shipping, then billing, address name |
+| `customer_email` / `customer_phone` | `email` or `contact_email` or customer email / `phone` or customer phone or shipping phone |
+| `ship_*`, `bill_*` | `shipping_address`, `billing_address` (`province` → state, `province_code` → state code, `zip` → pincode). No billing address → billing = shipping. Shopify has no landmark |
+| `bill_gstin` | billing `company`, only when it is a valid 15-character GSTIN |
+| `payment_status` / `fulfillment_status` | `financial_status` / `fulfillment_status` (null → `unfulfilled`) |
+| amounts | `subtotal_price`, `total_discounts`, `total_shipping_price_set` (shop currency), `total_tax`, `total_price`; `currency` |
+| `paid_amount` | `total_price − total_outstanding` when paid, partially paid or refunded; else 0 |
+| `refunded_amount` | successful `refund` transactions |
+| `coupon_code`, `payment_gateway`, `customer_notes` | first `discount_codes` code, `payment_gateway_names`, `note` |
+
+Header amounts are Shopify's own totals (they include shipping), not re-added from the lines.
+
+**Lines** (one per `line_items` entry)
+
+| Column | Shopify field |
+| --- | --- |
+| `external_line_id`, `sku`, `product_name`, `variant_name` | `id`, `sku`, `title`, `variant_title` |
+| `ordered_qty`, `unit_price` | `quantity`, `price` |
+| `line_discount_amount` | sum of `discount_allocations` |
+| `line_total_amount` | `price × quantity − discount` |
+| `cgst/sgst/igst_amount`, `tax_rate` | `tax_lines` by title: CGST; SGST or UTGST; IGST and any other title (single-rate tax). Rate = sum of rates × 100 |
+| `shipped_qty`, tracking, `shipped_at` | `fulfillments` with status `success` |
+| `delivered_at` | when those fulfillments have `shipment_status = delivered` |
+| `returned_qty`, `line_refunded_amount` | `refunds` → `refund_line_items` with `restock_type = return`; refunded `subtotal` |
+| `cancelled_qty` | removed by order edits (`quantity − current_quantity − returned`) or refund `restock_type = cancel`; on a cancelled order, everything not shipped |
+| `variant_id`, `product_id` | left empty; the product import (#13) links them and re-imports never overwrite them |
+
+**Status**
+
+- Line: nothing left after cancellations → `cancelled`; fully returned → `returned`; fully shipped → `shipped`, or `delivered` when delivered; otherwise (including partly shipped) → `pending`.
+- Header `order_status` is calculated from the lines: all cancelled → `cancelled`; all remaining delivered or returned → `delivered`; all remaining shipped, delivered or returned → `shipped`; otherwise `pending`.
+- **Never backwards.** Shopify can move a status forward (pending → shipped → delivered → returned, or to cancelled) but never back; `cancelled` and `returned` are final. When Shopify is behind (e.g. after a manual "Mark shipped"), our shipping fields are kept and the rest of the order is still updated.
+
+**Order edits.** New Shopify line items become new lines (next `line_number`). Lines that disappear from the Shopify order are kept and marked `cancelled`.
+
+**Rejected orders.** An order with no `id` or `created_at`, an unparseable amount, date or quantity, a line without an id or title, or duplicate line ids is recorded as a `failed` import row listing every problem; the rest of the run continues. Text longer than its column is cut to fit; NUL characters are removed before storing the payload.
+
+**Import runs** (`POST /orders/import`, `ingestion_method = manual_sync`): run in the background; poll `GET /orders/imports/{id}` and list failures with `GET /orders/imports/{id}/rows?status=failed`. One run at a time per connection (409 otherwise); a run with no progress for 30 minutes is marked failed so a new one can start. If Shopify fails midway the run is `failed` and the orders already processed are kept. Without the `read_all_orders` scope Shopify returns only the last 60 days of orders; the response includes a warning.
+
+**Shopify app requirements.** Scopes `read_orders` (and `read_all_orders` for older orders), plus **protected customer data access** for name, email, phone and address; without it Shopify answers 403 to every order request.

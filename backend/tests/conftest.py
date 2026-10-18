@@ -1,4 +1,78 @@
+"""Tests run against their own database (mvp_test), never the development mvp_db.
+
+TEST_DATABASE_URL overrides the default. The database is created if missing and
+migrated to head before the tests; DB tests are skipped if Postgres is unreachable.
+"""
+
 import os
 
-# Tests never need a real .env; fall back to the local Docker database from SETUP.md.
-os.environ.setdefault("DATABASE_URL", "postgresql://mvp:mvp_local@localhost:5432/mvp_db")
+import psycopg
+import pytest
+from sqlalchemy.engine import make_url
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql://mvp:mvp_local@localhost:5432/mvp_test"
+)
+# Must happen before app modules are imported: settings and the engine read it once.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+
+def _create_test_database() -> bool:
+    url = make_url(TEST_DATABASE_URL)
+    try:
+        with psycopg.connect(
+            host=url.host,
+            port=url.port or 5432,
+            user=url.username,
+            password=url.password,
+            dbname="postgres",
+            autocommit=True,
+            connect_timeout=3,
+        ) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (url.database,)
+            ).fetchone()
+            if not exists:
+                conn.execute(f'CREATE DATABASE "{url.database}"')
+        return True
+    except psycopg.OperationalError:
+        return False
+
+
+DB_AVAILABLE = _create_test_database()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database():
+    if DB_AVAILABLE:
+        from alembic import command
+        from alembic.config import Config
+
+        from app.config import BACKEND_DIR
+
+        command.upgrade(Config(str(BACKEND_DIR / "alembic.ini")), "head")
+    yield
+
+
+ECS_TABLES = (
+    "ecs_order_line_history, ecs_order_history, ecs_order_line, ecs_order_import_row, "
+    "ecs_order_header, ecs_order_import, ecs_channel_connection"
+)
+
+
+@pytest.fixture
+def clean_db():
+    """Empty every order table before (and after) a test that commits data."""
+    if not DB_AVAILABLE:
+        pytest.skip("needs the local Postgres from SETUP.md")
+    from sqlalchemy import text
+
+    from app.db import engine
+
+    def truncate():
+        with engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE {ECS_TABLES} RESTART IDENTITY CASCADE"))
+
+    truncate()
+    yield
+    truncate()

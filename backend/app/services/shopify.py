@@ -210,6 +210,13 @@ class ShopifyClient:
             # other filters alongside page_info.
             page_params = None
 
+    def access_scopes(self) -> set[str]:
+        """The access scopes granted to the app on this store (not tied to an API version)."""
+        response = self.request(
+            "GET", f"https://{self.store_domain}/admin/oauth/access_scopes.json"
+        )
+        return {scope["handle"] for scope in response.json().get("access_scopes", [])}
+
     def graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run a GraphQL Admin API query and return its `data`."""
         response = self.request(
@@ -234,7 +241,8 @@ class ShopifyClient:
     def _hint(status_code: int) -> str:
         hints = {
             401: " (check the Shopify credentials in .env)",
-            403: " (the app is missing an access scope for this call)",
+            403: " (the app is missing an access scope, or protected customer data access, "
+            "for this call)",
             404: " (check SHOPIFY_STORE_DOMAIN and SHOPIFY_API_VERSION)",
         }
         return hints.get(status_code, "")

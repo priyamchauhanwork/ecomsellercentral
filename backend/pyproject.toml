@@ -37,3 +37,11 @@ extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection defaults are meant to be calls.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.isort]
+# The local alembic/ folder holds migrations; the alembic import is the library.
+known-third-party = ["alembic"]

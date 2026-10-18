@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import health
+from app.routers import health, orders
 
 logger = logging.getLogger("app")
 
@@ -27,6 +27,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(orders.router)
 
 
 @app.exception_handler(Exception)
