@@ -112,3 +112,12 @@ def test_refuses_production(monkeypatch):
 def test_count_must_be_in_range(count_arg):
     with pytest.raises(SystemExit):
         seed_orders.main(["--count", count_arg])
+
+
+def test_line_items_per_order_follow_the_weights():
+    seed_orders.main(["--count", "1000"])
+    sizes = [len(order.lines) for order in seeded()]
+    for line_count, percent in seed_orders.LINE_COUNT_WEIGHTS.items():
+        share = 100 * sizes.count(line_count) / len(sizes)
+        assert abs(share - percent) <= 4, (line_count, share)
+    assert set(sizes) == {1, 2, 3, 4}

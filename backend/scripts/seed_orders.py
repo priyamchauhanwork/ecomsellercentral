@@ -32,6 +32,8 @@ CENT = Decimal("0.01")
 DAYS_BACK = 120
 
 STATUS_WEIGHTS = {"pending": 35, "shipped": 30, "delivered": 25, "cancelled": 10}
+# Share of orders (%) by number of line items.
+LINE_COUNT_WEIGHTS = {1: 45, 2: 30, 3: 15, 4: 10}
 PRODUCTS = [
     ("Classic Chronograph Watch", "Black / 42mm", "WATCH-CHR-BLK-42", "1499.00"),
     ("Classic Chronograph Watch", "Silver / 40mm", "WATCH-CHR-SLV-40", "1499.00"),
@@ -131,7 +133,8 @@ def build_order(rng: random.Random, index: int, now: datetime, store_id: int) ->
     shipped_at = placed + timedelta(days=rng.randint(1, 3))
     delivered_at = shipped_at + timedelta(days=rng.randint(2, 6))
     lines = []
-    for number in range(1, rng.choice([1, 1, 1, 2, 2, 3, 4]) + 1):
+    line_count = rng.choices(list(LINE_COUNT_WEIGHTS), weights=LINE_COUNT_WEIGHTS.values())[0]
+    for number in range(1, line_count + 1):
         product, variant, sku, price = rng.choice(PRODUCTS)
         unit_price = Decimal(price) if not usd else money(Decimal(price) / 84)
         qty = rng.choice([1, 1, 1, 2, 3])
