@@ -1,0 +1,30 @@
+# Polling fallback for missed Shopify webhooks (#12): calls POST /sync/orders on a
+# schedule. Runs only once the ORDER_SYNC_URL repository variable is set (after #14),
+# with the API_SHARED_SECRET repository secret. See docs/infra.md.
+name: Sync Shopify orders
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-orders
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: ${{ vars.ORDER_SYNC_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger the order sync
+        env:
+          SYNC_URL: ${{ vars.ORDER_SYNC_URL }}
+          API_KEY: ${{ secrets.API_SHARED_SECRET }}
+        # A sleeping Render free instance takes about a minute to wake: allow for it and
+        # retry. A retry after a run already started gets "already_running", which is fine.
+        run: >
+          curl --fail-with-body --silent --show-error
+          --max-time 120 --retry 3 --retry-delay 20 --retry-all-errors
+          -X POST -H "X-API-Key: $API_KEY" "$SYNC_URL"

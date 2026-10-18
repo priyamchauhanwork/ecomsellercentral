@@ -31,6 +31,7 @@ class FakeShopify:
         self.orders = orders
         self.fail_after = fail_after
         self.scopes = set(scopes)
+        self.params = None  # what the last paginate() call asked Shopify for
 
     def __enter__(self):
         return self
@@ -42,6 +43,7 @@ class FakeShopify:
         return self.scopes
 
     def paginate(self, path, key, params=None):
+        self.params = params
         for index, order in enumerate(self.orders):
             if self.fail_after is not None and index == self.fail_after:
                 raise ShopifyError("Shopify GET /orders.json failed with 503", 503, "Unavailable")

@@ -58,6 +58,15 @@ must be in the same region for the internal URL to work.
 - **Logs:** with no shell access, Sentry (#32) and the Render log view are how we debug
   production.
 
+## Order polling scheduler (#12)
+
+**Choice: a GitHub Actions scheduled workflow** (`.github/workflows/sync-orders.yml`), free because the repo is public. An in-process scheduler would not run while the free web service sleeps, which is exactly when webhooks get missed; an outside call also wakes the service. A Render Cron Job would work too but is paid.
+
+- Runs every 15 minutes (`*/15 * * * *`) and on demand (Actions → *Sync Shopify orders* → *Run workflow*). It calls `POST /sync/orders` with the `X-API-Key` header, allowing about a minute for a sleeping service to wake, with 3 retries.
+- **Switched off until deployed:** the job runs only when the repository **variable** `ORDER_SYNC_URL` is set (e.g. `https://shopify-mvp-api.onrender.com/sync/orders`). It also needs the repository **secret** `API_SHARED_SECRET`, the same value as on Render. Set both in GitHub → Settings → Secrets and variables → Actions (#14).
+- The server decides whether a sync is due: scheduled calls are skipped (`not_due`, 200) until `ecs_channel_connection.sync_interval_minutes` (default 15) has passed since the last successful sync, so the interval can change without editing the workflow.
+- GitHub may start scheduled runs several minutes late under load, and **disables scheduled workflows in a public repo after 60 days without commits**; re-enable it in the Actions tab if that happens.
+
 ## Decision: paid database before the pilot
 
 **Yes — upgrade Postgres to a paid instance before onboarding the pilot seller (#39).**

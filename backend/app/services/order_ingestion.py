@@ -9,12 +9,13 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import httpx
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -51,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 RUNNING_STATUSES = ("pending", "validating", "processing")
 STALE_RUN_AFTER = timedelta(minutes=30)
+# Each sync re-reads this much before its cursor, so orders updated while the previous
+# sync was paging aren't missed. Re-read orders are reported "unchanged".
+SYNC_OVERLAP = timedelta(minutes=5)
 # Rows whose payload we are consistent with; the newest one's hash is "last applied".
 CONSISTENT_ACTIONS = ("created", "updated", "unchanged")
 ORDER_STATUS_RANK = {"pending": 0, "shipped": 1, "delivered": 2, "cancelled": 3}
@@ -204,23 +208,44 @@ def start_import(
     return run
 
 
+def sync_start_time(session: Session, connection: ChannelConnection) -> datetime | None:
+    """Where a sync resumes: the saved cursor, else the newest order update we hold,
+    minus SYNC_OVERLAP. None (fetch everything) for a connection with no orders yet."""
+    resume_from = timestamp(connection.sync_cursor, [], "sync_cursor") or session.scalar(
+        select(func.max(OrderHeader.external_updated_at)).where(
+            OrderHeader.channel_connection_id == connection.channel_connection_id
+        )
+    )
+    return resume_from - SYNC_OVERLAP if resume_from else None
+
+
 def run_shopify_order_import(
     order_import_id: int,
     *,
+    updated_at_min: datetime | None = None,
     client_factory: Callable[[], ShopifyClient] | None = None,
     session_factory: sessionmaker[Session] = SessionLocal,
 ) -> None:
-    """Fetch every Shopify order into the run and process each one. Never raises: any
-    failure ends up in the run's status and error_summary."""
+    """Fetch Shopify orders (all of them, or those updated since `updated_at_min`) into
+    the run and process each one, then move the connection's sync cursor. Never raises:
+    any failure ends up in the run's status and error_summary."""
     mark_processing(session_factory, order_import_id)
+    params = {"status": "any"}
+    if updated_at_min:
+        params["updated_at_min"] = updated_at_min.astimezone(UTC).isoformat()
+    newest_seen: datetime | None = None
     fetch_error: str | None = None
     try:
         with (client_factory or shopify_client_factory)() as shopify:
-            orders = shopify.paginate("/orders.json", "orders", {"status": "any"})
+            orders = shopify.paginate("/orders.json", "orders", params)
             for record_number, payload in enumerate(orders, 1):
                 with session_factory.begin() as session:
                     row_id = record_import_row(session, order_import_id, record_number, payload)
                 process_import_row(row_id, session_factory=session_factory)
+                order = payload if isinstance(payload, dict) else {}
+                updated = timestamp(order.get("updated_at"), [], "updated_at")
+                if updated and (newest_seen is None or updated > newest_seen):
+                    newest_seen = updated
     except ShopifyError as exc:
         fetch_error = f"Shopify request failed: {exc}. {exc.body[:300]}"
         if "protected customer data" in exc.body:
@@ -234,6 +259,25 @@ def run_shopify_order_import(
         logger.exception("Order import %s crashed", order_import_id)
         fetch_error = f"Unexpected error: {type(exc).__name__}: {exc}"
     finish_import(session_factory, order_import_id, fetch_error)
+    save_sync_progress(session_factory, order_import_id, newest_seen)
+
+
+def save_sync_progress(
+    session_factory: sessionmaker[Session], order_import_id: int, newest_seen: datetime | None
+) -> None:
+    """Record the outcome on the connection. A completed or partially completed run moves
+    the cursor (never backwards) and last_synced_at; its failed rows carry their errors."""
+    with session_factory.begin() as session:
+        run = session.get(OrderImport, order_import_id)
+        connection = session.get(ChannelConnection, run.channel_connection_id, with_for_update=True)
+        connection.last_sync_status = run.status
+        if run.status == "failed":  # fetch error, or every order failed: retry next time
+            return
+        current = timestamp(connection.sync_cursor, [], "sync_cursor")
+        if newest_seen and (current is None or newest_seen > current):
+            connection.sync_cursor = newest_seen.astimezone(UTC).isoformat()  # always UTC
+        run.cursor_end = connection.sync_cursor
+        connection.last_synced_at = run.completed_at
 
 
 def record_webhook_delivery(
@@ -620,3 +664,46 @@ def update_order(
             )
         )
     return True
+
+
+# --- Scheduled and manual sync (#12) ------------------------------------------------------
+
+
+@dataclass
+class SyncStart:
+    result: str  # started | already_running | not_due | disabled
+    run: OrderImport | None = None
+    updated_at_min: datetime | None = None
+    next_due_at: datetime | None = None
+
+
+def start_order_sync(session: Session, trigger: str) -> SyncStart:
+    """Start a sync run for the Shopify connection, in the caller's transaction.
+
+    `trigger` is "scheduled" or "manual". Scheduled calls are skipped until
+    sync_interval_minutes have passed since the last successful sync, so the external
+    scheduler can call more often than the interval; manual calls always run.
+    """
+    connection = ensure_shopify_connection(session)
+    if not connection.sync_enabled:
+        return SyncStart("disabled")
+    if trigger == "scheduled" and connection.last_synced_at:
+        # A minute's grace, so a scheduler running exactly every interval isn't skipped.
+        next_due_at = connection.last_synced_at + timedelta(
+            minutes=connection.sync_interval_minutes - 1
+        )
+        if utcnow() < next_due_at:
+            return SyncStart("not_due", next_due_at=next_due_at)
+    try:
+        run = start_import(
+            session,
+            connection.channel_connection_id,
+            "scheduled_sync" if trigger == "scheduled" else "manual_sync",
+        )
+    except ImportAlreadyRunning as exc:
+        return SyncStart("already_running", run=session.get(OrderImport, exc.order_import_id))
+    updated_at_min = sync_start_time(session, connection)
+    run.cursor_start = connection.sync_cursor
+    run.sync_from = updated_at_min
+    run.sync_to = utcnow()
+    return SyncStart("started", run=run, updated_at_min=updated_at_min)

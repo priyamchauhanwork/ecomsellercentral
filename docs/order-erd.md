@@ -458,6 +458,15 @@ Header amounts are Shopify's own totals (they include shipping), not re-added fr
 4. **Answer, then process.** The response goes back immediately; the shared processing step runs in the background, and the run ends `completed` or `failed`. An order that can't be mapped is still answered 200 (it is stored, and retrying wouldn't fix it) and recorded as a failed row.
 5. Webhook runs never block, and are never blocked by, an import or sync run.
 
+## Polling sync (#12)
+
+`POST /sync/orders?trigger=scheduled|manual` (`backend/app/routers/sync.py`), protected by `X-API-Key` when `API_SHARED_SECRET` is set. Scheduler setup: `docs/infra.md`.
+
+- **Where it resumes:** `sync_cursor` minus 5 minutes of overlap. With no cursor (or an unreadable one), the newest `external_updated_at` among the connection's orders, minus 5 minutes; with no orders, everything. Orders re-read in the overlap are reported `unchanged`.
+- **Cursor:** the newest Shopify `updated_at` seen in the run (Shopify's clock, not ours), stored in UTC, and never moved backwards. It moves only after a `completed` or `partially_completed` run, together with `last_synced_at`; a `failed` run (Shopify error, or every order failed) leaves both unchanged so the next sync retries. `last_sync_status` is always updated. Orders that failed inside a partially completed run are not retried by later syncs unless Shopify updates them again; their errors are on the import rows. The full import (`POST /orders/import`) moves the cursor too.
+- **One at a time:** shares the import's lock. An overlapping call returns the running run (`already_running`, 200).
+- **Interval:** `scheduled` calls are skipped (`not_due`, 200, with `next_due_at`) until `sync_interval_minutes` (minus one minute of grace) have passed since `last_synced_at`; `manual` calls always run. `sync_enabled = false` → `disabled`, 200. A started run returns 202 and is processed in the background.
+
 ## Manual status changes (#10)
 
 `POST /orders/{id}/status` with `{"status": ..., "remarks": ...}` (`backend/app/services/order_status.py`).
