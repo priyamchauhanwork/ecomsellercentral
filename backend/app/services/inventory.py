@@ -166,8 +166,8 @@ def adjust_stock(
     note: str | None,
 ) -> InventoryLog:
     """Change an item's stock by hand and log it, in the caller's transaction, with the
-    item row locked (FOR NO KEY UPDATE) so concurrent changes can't be lost. A removal may not take stock
-    below 0; adding is always allowed, even while stock is still negative (oversold)."""
+    item row locked (FOR NO KEY UPDATE) so concurrent changes can't be lost. A removal may
+    not take stock below 0; adding is always allowed, even while stock is negative (oversold)."""
     item = session.get(Item, item_id, with_for_update={"key_share": True})
     if item is None or item.seller_id != seller_id:
         raise ItemNotFound(item_id)
