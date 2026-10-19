@@ -525,6 +525,21 @@ def test_disable_and_enable_a_product(shopify):
     assert shopify.named("publishablePublish")[-1]["id"] == "gid://shopify/Product/7001"
 
 
+@pytest.mark.parametrize("article_status", ["archived", "draft"])
+def test_putting_a_product_on_sale_makes_the_article_active(shopify, article_status):
+    detail, listing = imported_watch()
+    url = f"/products/{detail['article_id']}/listings/{listing['listing_id']}/status"
+    client.post(url, json={"status": "inactive"})
+    with SessionLocal() as session:
+        session.get(Article, detail["article_id"]).status = article_status
+        session.commit()
+
+    body = client.post(url, json={"status": "inactive"}).json()  # no change: left as it is
+    assert body["status"] == article_status
+    body = client.post(url, json={"status": "live"}).json()
+    assert body["status"] == "active" and body["listings"][0]["status"] == "live"
+
+
 def test_product_status_change_failing_on_shopify_changes_nothing(shopify):
     detail, listing = imported_watch()
     shopify.fail["productUpdate"] = "Access denied for productUpdate"

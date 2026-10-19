@@ -287,7 +287,8 @@ def set_listing_status(
 ) -> None:
     """Enable (status ACTIVE + Online Store) or disable (status DRAFT, hidden from every
     sales channel) a product on Shopify, then record it locally. Per-SKU states are kept:
-    a SKU disabled before stays disabled when the product is enabled again."""
+    a SKU disabled before stays disabled when the product is enabled again. A product put
+    on sale is active in the catalog, so an archived or draft article becomes active."""
     product_id = gid("Product", listing.channel_parent_id)
     if status == "live":
         mutate(
@@ -302,6 +303,7 @@ def set_listing_status(
             {"id": product_id, "input": [{"publicationId": online_store(shopify)}]},
             "publishablePublish",
         )
+        session.get(Article, listing.article_id).status = "active"
     else:
         mutate(
             shopify,
