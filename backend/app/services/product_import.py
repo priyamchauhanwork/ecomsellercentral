@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.services.order_mapping import clip
 from app.services.shopify import ShopifyClient, get_shopify_client
+from app.services.stock import open_item_stock
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,7 @@ def import_variant(
         )
         session.add(item)
         session.flush()
+        open_item_stock(session, [item])
         listing_item = ChannelListingItem(
             listing_id=listing.listing_id,
             item_id=item.item_id,

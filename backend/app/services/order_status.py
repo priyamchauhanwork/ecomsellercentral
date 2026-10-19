@@ -1,4 +1,4 @@
-"""Manual order status changes from the admin UI (#10, #18).
+"""Manual order status changes from the admin UI (#10, #18, #52).
 
 The status is set on the lines and the header is recalculated from them, as the ERD's
 design rules require. Only forward moves are allowed, matching the Shopify sync (#9).
@@ -13,11 +13,13 @@ from app.models import OrderHeader, OrderHistory, OrderLineHistory
 from app.services.order_ingestion import line_action
 from app.services.order_mapping import order_status_from_lines
 
-OrderStatus = Literal["pending", "shipped", "delivered", "cancelled"]
+OrderStatus = Literal["pending", "processing", "shipped", "delivered", "cancelled"]
 
 # Allowed manual moves. Delivered and cancelled are final; un-shipping is not supported.
+# pending → processing is "Acknowledge": the team has started on the order.
 ALLOWED_CHANGES: dict[str, set[str]] = {
-    "pending": {"shipped", "delivered", "cancelled"},
+    "pending": {"processing", "shipped", "delivered", "cancelled"},
+    "processing": {"shipped", "delivered", "cancelled"},
     "shipped": {"delivered"},
     "delivered": set(),
     "cancelled": set(),
@@ -51,14 +53,20 @@ def change_order_status(
             continue
         line_old_status = line.line_status
         live_qty = line.ordered_qty - line.cancelled_qty
-        if new_status == "cancelled":
-            line.cancelled_qty = line.ordered_qty - line.shipped_qty
-        else:  # shipped or delivered: everything not cancelled has left the warehouse
-            line.shipped_qty = live_qty
-            line.shipped_at = line.shipped_at or now
-            if new_status == "delivered":
-                line.delivered_at = line.delivered_at or now
-        line.line_status = new_status
+        if new_status == "processing":
+            if line.line_status != "pending":
+                continue  # already acknowledged, packed or shipped
+            line.line_status = "allocated"
+        else:
+            if new_status == "cancelled":
+                line.cancelled_qty = line.ordered_qty - line.shipped_qty
+            else:  # shipped or delivered: everything not cancelled has left the warehouse
+                line.shipped_qty = live_qty
+                line.shipped_at = line.shipped_at or now
+                if new_status == "delivered":
+                    line.delivered_qty = line.shipped_qty
+                    line.delivered_at = line.delivered_at or now
+            line.line_status = new_status
         line.version_no += 1
         changed_lines.append((line, line_old_status))
 
@@ -69,11 +77,17 @@ def change_order_status(
     header.version_no += 1
 
     history_source = {"change_source": "admin_ui", "remarks": remarks}
+    if header.order_status == "cancelled":
+        action = "cancelled"
+    elif new_status == "processing":
+        action = "acknowledged"
+    else:
+        action = "status_change"
     session.add(
         OrderHistory(
             order_header_id=header.order_header_id,
             version_no=header.version_no,
-            action_type="cancelled" if header.order_status == "cancelled" else "status_change",
+            action_type=action,
             old_status=old_status,
             new_status=header.order_status,
             changed_fields={"order_status": [old_status, header.order_status]},

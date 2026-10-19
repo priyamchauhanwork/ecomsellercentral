@@ -26,7 +26,7 @@ LINE_STATUS_RANK = {
     "returned": 6,
     "cancelled": 7,
 }
-ORDER_STATUSES = ("pending", "shipped", "delivered", "cancelled")
+ORDER_STATUSES = ("pending", "processing", "shipped", "delivered", "cancelled")
 
 
 class OrderMappingError(ValueError):
@@ -221,14 +221,17 @@ def map_line(
     taxes, tax_rate = classify_taxes(item.get("tax_lines"), problems, label)
 
     # Fulfillments: shipped quantity, tracking, delivery.
-    shipped_qty, delivered, shipment = 0, True, None
+    shipped_qty, delivered_qty, delivered, shipment = 0, 0, True, None
     for fulfillment in order.get("fulfillments") or []:
         if fulfillment.get("status") != "success":
             continue
         for fulfilled in fulfillment.get("line_items") or []:
             if fulfilled.get("id") != line_id:
                 continue
-            shipped_qty += quantity(fulfilled.get("quantity"), problems, f"{label} shipped qty")
+            units = quantity(fulfilled.get("quantity"), problems, f"{label} shipped qty")
+            shipped_qty += units
+            if fulfillment.get("shipment_status") == "delivered":
+                delivered_qty += units
             delivered = delivered and fulfillment.get("shipment_status") == "delivered"
             shipment = shipment or fulfillment
     if shipped_qty == 0:
@@ -260,6 +263,7 @@ def map_line(
     cancelled_qty = max(0, min(cancelled_qty, ordered_qty))
     shipped_qty = min(shipped_qty, ordered_qty)
     returned_qty = min(returned_qty, ordered_qty)
+    delivered_qty = min(delivered_qty, shipped_qty)
     active_qty = ordered_qty - cancelled_qty
 
     shipped_at = (
@@ -299,6 +303,7 @@ def map_line(
         "tracking_number": clip((shipment or {}).get("tracking_number"), 100),
         "shipped_at": shipped_at,
         "delivered_at": delivered_at,
+        "delivered_qty": delivered_qty,
         "line_status": line_status_for(active_qty, shipped_qty, returned_qty, delivered),
     }
 
@@ -312,6 +317,9 @@ def order_status_from_lines(line_statuses: list[str]) -> str:
         return "delivered"
     if all(status in ("shipped", "delivered", "returned") for status in live):
         return "shipped"
+    # Acknowledged: every line not yet shipped is allocated or packed.
+    if all(status != "pending" for status in live):
+        return "processing"
     return "pending"
 
 

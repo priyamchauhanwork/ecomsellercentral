@@ -71,7 +71,12 @@ ORDER_HISTORY_ACTIONS = (
     "payment_update",
     "cancelled",
     "synced_update",
+    "acknowledged",
+    "rto",
+    "attention_cleared",
 )
+# Why an order needs the team's attention (docs/inventory-erd.md, decisions).
+ATTENTION_REASONS = ("cancelled_after_acknowledgement", "edited_after_acknowledgement")
 LINE_HISTORY_ACTIONS = (
     "created",
     "status_change",
@@ -190,6 +195,10 @@ class OrderHeader(TimestampMixin, Base):
             name="last_ingestion_method",
         ),
         CheckConstraint("version_no >= 1", name="version_no_positive"),
+        CheckConstraint(
+            f"attention_reason IS NULL OR {in_check('attention_reason', ATTENTION_REASONS)}",
+            name="attention_reason",
+        ),
     )
 
     order_header_id: Mapped[int] = bigint_pk()
@@ -272,6 +281,9 @@ class OrderHeader(TimestampMixin, Base):
     internal_notes: Mapped[str | None] = mapped_column(Text)
     cancel_reason: Mapped[str | None] = mapped_column(Text)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when Shopify cancels or cuts an order the team already acknowledged.
+    attention_reason: Mapped[str | None] = mapped_column(String(40))
+    attention_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     version_no: Mapped[int] = mapped_column(Integer, server_default="1")
     is_deleted: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
@@ -292,6 +304,8 @@ class OrderLine(TimestampMixin, Base):
     __tablename__ = "ecs_order_line"
     __table_args__ = (
         UniqueConstraint("order_header_id", "line_number"),
+        # Target of ecs_inventory_demand's composite foreign key.
+        UniqueConstraint("order_line_id", "order_header_id"),
         Index(None, "tracking_number"),
         Index(None, "sku"),
         Index(None, "variant_id"),
@@ -299,6 +313,9 @@ class OrderLine(TimestampMixin, Base):
         CheckConstraint(
             "ordered_qty >= 0 AND shipped_qty >= 0 AND cancelled_qty >= 0 AND returned_qty >= 0",
             name="quantities_non_negative",
+        ),
+        CheckConstraint(
+            "delivered_qty >= 0 AND delivered_qty <= shipped_qty", name="delivered_within_shipped"
         ),
     )
 
@@ -319,6 +336,7 @@ class OrderLine(TimestampMixin, Base):
     shipped_qty: Mapped[int] = mapped_column(Integer, server_default="0")
     cancelled_qty: Mapped[int] = mapped_column(Integer, server_default="0")
     returned_qty: Mapped[int] = mapped_column(Integer, server_default="0")
+    delivered_qty: Mapped[int] = mapped_column(Integer, server_default="0")
 
     # Pricing and GST
     unit_price: Mapped[Decimal] = money()

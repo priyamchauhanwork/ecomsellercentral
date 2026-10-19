@@ -59,6 +59,13 @@ class Settings(BaseSettings):
         return self.shopify_webhook_secret or self.shopify_api_secret
 
     @property
+    def shopify_webhook_secrets(self) -> list[str]:
+        """Every secret a webhook may be signed with: subscriptions made in the Shopify
+        admin use the store's secret, those made by the app (return topics, #53) the
+        app's client secret."""
+        return [s for s in (self.shopify_webhook_secret, self.shopify_api_secret) if s]
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 

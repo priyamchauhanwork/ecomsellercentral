@@ -1,5 +1,6 @@
-"""Shopify order webhooks (#11): verify the signature, record the delivery, answer
-at once, and process the order in the background (docs/order-erd.md, "Webhook")."""
+"""Shopify order and return webhooks (#11, #53): verify the signature, record the
+delivery, answer at once, and process it in the background (docs/order-erd.md,
+"Webhook"; docs/inventory-erd.md)."""
 
 import base64
 import hashlib
@@ -12,7 +13,11 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.services.order_ingestion import record_webhook_delivery, run_webhook_import
+from app.services.order_ingestion import (
+    RETURN_TOPICS,
+    record_webhook_delivery,
+    run_webhook_import,
+)
 from app.services.shopify import normalize_store_domain
 
 logger = logging.getLogger(__name__)
@@ -45,14 +50,15 @@ def record(topic: str, delivery_id: str | None, payload: object) -> tuple[int, i
 async def shopify_order_webhook(request: Request, background_tasks: BackgroundTasks):
     """Receive an order webhook from Shopify. Must answer within 5 seconds."""
     settings = get_settings()
-    secret = settings.shopify_webhook_signing_secret
-    if not secret:  # 503 so Shopify retries once the secret is configured
+    secrets = settings.shopify_webhook_secrets
+    if not secrets:  # 503 so Shopify retries once the secret is configured
         logger.error("Shopify webhook received but no signing secret is configured")
         raise HTTPException(503, "Webhook signing secret is not configured")
 
     body = await request.body()  # the exact bytes Shopify signed
     headers = request.headers
-    if not signature_is_valid(body, headers.get("X-Shopify-Hmac-Sha256", ""), secret):
+    received = headers.get("X-Shopify-Hmac-Sha256", "")
+    if not any(signature_is_valid(body, received, secret) for secret in secrets):
         logger.warning(
             "Rejected Shopify webhook with an invalid signature (topic=%s, shop=%s)",
             headers.get("X-Shopify-Topic"),
@@ -61,7 +67,7 @@ async def shopify_order_webhook(request: Request, background_tasks: BackgroundTa
         raise HTTPException(401, "Invalid webhook signature")
 
     topic = headers.get("X-Shopify-Topic", "")
-    if topic not in ORDER_TOPICS:
+    if topic not in ORDER_TOPICS | RETURN_TOPICS:
         logger.info("Ignored Shopify webhook topic %r", topic)
         return {"status": "ignored", "reason": f"unsupported topic {topic!r}"}
 

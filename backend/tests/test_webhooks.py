@@ -142,11 +142,14 @@ def test_no_secret_configured_is_503(shopify_settings, monkeypatch):
     assert deliver(shopify_order()).status_code == 503
 
 
-def test_explicit_webhook_secret_overrides_api_secret(shopify_settings, monkeypatch):
-    monkeypatch.setattr(shopify_settings, "shopify_webhook_secret", "override")
+def test_store_secret_and_app_secret_are_both_accepted(shopify_settings, monkeypatch):
+    # Admin-created subscriptions are signed with the store's secret, app-created ones
+    # (the return topics) with the app's client secret.
+    monkeypatch.setattr(shopify_settings, "shopify_webhook_secret", "store-secret")
     body = json.dumps(shopify_order()).encode()
-    assert deliver(body, signature=sign(body)).status_code == 401
-    assert deliver(body, signature=sign(body, "override")).status_code == 200
+    assert deliver(body, signature=sign(body, "store-secret")).status_code == 200
+    assert deliver(body, signature=sign(body), delivery_id="wh-2").status_code == 200
+    assert deliver(body, signature=sign(body, "other"), delivery_id="wh-3").status_code == 401
 
 
 def test_bad_order_is_accepted_and_recorded_as_failed():
@@ -219,18 +222,24 @@ def connection_flags():
 def test_register_creates_both_topics_and_records_them(monkeypatch):
     fake = FakeGraphQL()
     assert run_script(monkeypatch, fake, "https://abc.example/webhooks/orders") == 0
-    assert [c[0] for c in fake.calls] == ["webhookSubscriptionCreate"] * 2
-    assert connection_flags() == (True, ["orders/create", "orders/updated"])
+    assert [c[0] for c in fake.calls] == ["webhookSubscriptionCreate"] * len(
+        register_webhooks.TOPICS
+    )
+    enabled, topics = connection_flags()
+    assert enabled and topics[:2] == ["orders/create", "orders/updated"]
+    assert "returns/approve" in topics and "reverse_fulfillment_orders/dispose" in topics
 
 
 def test_register_again_keeps_or_moves_subscriptions(monkeypatch):
     url = "https://abc.example/webhooks/orders"
-    same = FakeGraphQL([("ORDERS_CREATE", url), ("ORDERS_UPDATED", url)])
+    same = FakeGraphQL([(topic, url) for topic in register_webhooks.TOPICS])
     assert run_script(monkeypatch, same, url) == 0 and same.calls == []
 
     moved = FakeGraphQL([("ORDERS_CREATE", "https://old/webhooks/orders")])
     run_script(monkeypatch, moved, url)
-    assert [c[0] for c in moved.calls] == ["webhookSubscriptionUpdate", "webhookSubscriptionCreate"]
+    assert [c[0] for c in moved.calls] == ["webhookSubscriptionUpdate"] + [
+        "webhookSubscriptionCreate"
+    ] * (len(register_webhooks.TOPICS) - 1)
 
 
 def test_remove_deletes_subscriptions(monkeypatch):

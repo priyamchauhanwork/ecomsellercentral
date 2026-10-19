@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import health, inventory, orders, products, sync, webhooks
+from app.routers import health, inventory, orders, products, returns, sync, webhooks
 
 logger = logging.getLogger("app")
 
@@ -32,6 +32,7 @@ app.include_router(webhooks.router)
 app.include_router(sync.router)
 app.include_router(products.router)
 app.include_router(inventory.router)
+app.include_router(returns.router)
 
 
 @app.exception_handler(Exception)

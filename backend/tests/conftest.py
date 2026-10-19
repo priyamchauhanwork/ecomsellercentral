@@ -10,6 +10,9 @@ import psycopg
 import pytest
 from sqlalchemy.engine import make_url
 
+# Shared fixtures (shopify, watches) for the supply & demand tests.
+pytest_plugins = ["tests.stock_helpers"]
+
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql://mvp:mvp_local@localhost:5432/mvp_test"
 )
@@ -58,7 +61,8 @@ def migrated_test_database():
 
 # Sellers and channels are kept: the migration creates seller 1, which orders need.
 ECS_TABLES = (
-    "ecs_inventory_log, ecs_order_line_history, ecs_order_history, ecs_order_line, "
+    "ecs_inventory_log, ecs_inventory_supply, ecs_inventory_demand, ecs_return_lines, "
+    "ecs_returns, ecs_order_line_history, ecs_order_history, ecs_order_line, "
     "ecs_order_import_row, "
     "ecs_order_header, ecs_order_import, ecs_channel_listing_items, ecs_channel_listings, "
     "ecs_items, ecs_articles, ecs_channel_accounts"

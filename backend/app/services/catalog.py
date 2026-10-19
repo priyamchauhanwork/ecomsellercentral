@@ -17,6 +17,7 @@ from app.models import (
     Item,
 )
 from app.services.product_import import image_for
+from app.services.stock import open_item_stock
 
 LOW_STOCK = 5  # an item at or below this many units is low on stock
 MAX_VARIANTS = 100  # Shopify's classic variant limit, so a product can be published
@@ -446,4 +447,5 @@ def create_product(
     ]
     session.add(article)
     session.flush()
+    open_item_stock(session, article.items)
     return article

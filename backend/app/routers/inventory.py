@@ -1,7 +1,8 @@
 """Inventory endpoints: list, item, adjust and stock history (#19), Shopify stock sync
-and drift (#20). Static paths are declared before /inventory/{item_id}."""
+and drift (#20), supply & demand figures and damaged units (#51). Static paths are
+declared before /inventory/{item_id}."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,8 +12,8 @@ from sqlalchemy.orm import Session
 from app.auth import require_api_key
 from app.config import get_settings
 from app.db import get_db
-from app.models.catalog import MANUAL_STOCK_REASONS
-from app.services import inventory, product_import, stock_sync
+from app.models.inventory import MANUAL_STOCK_REASONS
+from app.services import inventory, product_import, stock, stock_sync
 from app.services.shopify import ShopifyConfigError, ShopifyError
 
 router = APIRouter(prefix="/inventory", tags=["inventory"], dependencies=[Depends(require_api_key)])
@@ -35,8 +36,19 @@ class InventoryItem(BaseModel):
     barcode: str | None
     variant_values: dict[str, str]
     image_url: str | None
-    stock_qty: int
-    stock_status: Literal["ok", "low", "out"]
+    stock_qty: int  # = available (cached)
+    stock_status: Literal["ok", "low", "out"]  # judged on available
+    onhand: int
+    open: int
+    allocated: int
+    shipped: int
+    committed: int  # open + allocated + shipped
+    return_pending: int
+    next_eta: date | None  # earliest expected return
+    damaged: int
+    available: int  # onhand − committed; pushed to Shopify (≥ 0)
+    future_available: int  # available + return_pending
+    on_shelf: int  # onhand − shipped
     status: str
     shopify: ShopifyState | None  # null when the item isn't on Shopify
 
@@ -45,6 +57,8 @@ class InventorySummary(BaseModel):
     items: int
     low_stock: int
     out_of_stock: int
+    returning: int
+    damaged: int
 
 
 class InventoryList(BaseModel):
@@ -72,22 +86,39 @@ class Adjustment(BaseModel):
         return (value.strip() or None) if isinstance(value, str) else value
 
 
+class DamagedChange(BaseModel):
+    action: Literal["repair", "write_off"]
+    quantity: Annotated[StrictInt, Field(gt=0, le=MAX_CHANGE)]
+    note: str | None = Field(None, max_length=500)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def blank_note(cls, value):
+        return (value.strip() or None) if isinstance(value, str) else value
+
+
 class HistoryEntry(BaseModel):
     inventory_log_id: int
+    side: Literal["SUPPLY", "DEMAND"] | None  # null: before the supply & demand model
+    inv_type: str | None
     qty_change: int
-    stock_after: int
+    stock_after: int  # that type's quantity after the change
     reason: str
     note: str | None
+    transaction_id: str | None
     order_header_id: int | None
     order_number: str | None
+    return_id: int | None
+    return_number: str | None
     created_at: datetime
 
 
 class AdjustResult(BaseModel):
     item: InventoryItem
-    entry: HistoryEntry
+    entries: list[HistoryEntry]  # the rows this change wrote
     synced: bool | None  # null: nothing to push (not on Shopify, or disabled there)
     sync_error: str | None
+    warning: str | None = None  # e.g. the SKU is now oversold
 
 
 class SyncResult(BaseModel):
@@ -152,35 +183,70 @@ def list_inventory(
 
 @router.post("/adjust", response_model=AdjustResult)
 def adjust(adjustment: Adjustment, db: Session = Depends(get_db)):
-    """Add or remove stock by hand. Stock and its log row are saved together; then the
-    new figure is pushed to Shopify. A failed push keeps the change (synced: false)."""
-    try:
-        entry = inventory.adjust_stock(
+    """Add or remove on-hand stock by hand; `damage` moves units from the shelf to
+    damaged. A removal may not exceed what is on the shelf (on hand − shipped). Saved
+    with its log rows, then `available` is pushed to Shopify (synced: false if that
+    failed; the change is kept)."""
+    return apply_change(
+        db,
+        adjustment.item_id,
+        lambda: inventory.adjust_stock(
             db,
             seller_id(),
             adjustment.item_id,
             adjustment.quantity_change,
             adjustment.reason,
             adjustment.note,
-        )
+        ),
+        "quantity_change",
+    )
+
+
+def apply_change(db: Session, item_id: int, make_change, field: str) -> AdjustResult:
+    try:
+        change = make_change()
+        changed = change.finish()
     except inventory.ItemNotFound as exc:
         db.rollback()
         raise HTTPException(404, "Item not found") from exc
-    except inventory.AdjustmentInvalid as exc:
+    except stock.StockInvalid as exc:
         db.rollback()
         raise HTTPException(
-            422, [{"loc": ["body", "quantity_change"], "msg": str(exc), "type": "value_error"}]
+            422, [{"loc": ["body", field], "msg": str(exc), "type": "value_error"}]
         ) from exc
+    transaction_id = str(change.transaction_id)
     db.commit()
-    entry_id = entry.inventory_log_id
-    outcome = stock_sync.sync_items({adjustment.item_id})[adjustment.item_id]
+    outcome = (
+        stock_sync.sync_items({item_id})[item_id]
+        if changed
+        else stock_sync.SyncOutcome(item_id, None)
+    )
     db.expire_all()
-    history = inventory.stock_history(db, seller_id(), adjustment.item_id)
+    item = item_or_404(db, item_id)
+    history = inventory.stock_history(db, seller_id(), item_id)
     return AdjustResult(
-        item=item_or_404(db, adjustment.item_id),
-        entry=next(e for e in history if e["inventory_log_id"] == entry_id),
+        item=item,
+        entries=[e for e in history if e["transaction_id"] == transaction_id],
         synced=outcome.synced,
         sync_error=outcome.error,
+        warning=(
+            f"Now oversold: {item.committed} committed to orders but {item.onhand} on hand."
+            if item.available < 0
+            else None
+        ),
+    )
+
+
+@router.post("/{item_id}/damaged", response_model=AdjustResult)
+def damaged(item_id: int, change: DamagedChange, db: Session = Depends(get_db)):
+    """Repair damaged units (back to on hand) or write them off."""
+    return apply_change(
+        db,
+        item_id,
+        lambda: inventory.change_damaged(
+            db, seller_id(), item_id, change.action, change.quantity, change.note
+        ),
+        "quantity",
     )
 
 

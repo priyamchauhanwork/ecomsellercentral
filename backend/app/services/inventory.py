@@ -1,13 +1,11 @@
-"""Stock: the inventory list, manual adjustments and stock history (#19), and keeping
-stock in step with orders (#21). Stock is ecs_items.stock_qty; every change to it is
-logged in ecs_inventory_log, in the same transaction.
+"""Stock reads and manual changes (#19, #51): the inventory list and item with every
+supply and demand figure, manual adjustments of on-hand stock, damaged units, and the
+stock history. The figures come from the ecs_item_stock view (docs/inventory-erd.md).
 """
 
-import logging
-from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import Date, Integer, column, func, or_, select, table
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -19,31 +17,46 @@ from app.models import (
     Item,
     OrderHeader,
     OrderLine,
+    Return,
+    ReturnLine,
 )
+from app.services import stock
 from app.services.catalog import LOW_STOCK, like_pattern, stock_status
 from app.services.product_import import image_for
 
-logger = logging.getLogger(__name__)
-
 SHOPIFY = "SHOPIFY"  # ecs_channels.code
 HISTORY_LIMIT = 100
+FIGURES = (
+    "onhand",
+    "open",
+    "allocated",
+    "shipped",
+    "return_pending",
+    "damaged",
+    "available",
+    "future_available",
+    "on_shelf",
+)
+
+item_stock = table(
+    "ecs_item_stock",
+    column("item_id", Integer),
+    *(column(name, Integer) for name in FIGURES),
+    column("next_eta", Date),
+)
 
 
 class ItemNotFound(LookupError):
     pass
 
 
-class AdjustmentInvalid(ValueError):
-    pass
-
-
-# --- List and detail (#19) ----------------------------------------------------------------
+# --- List and detail ----------------------------------------------------------------------
 
 
 def inventory_rows(
     session: Session, filters: list, limit: int | None = None, offset: int = 0
 ) -> list[dict[str, Any]]:
-    """Items with their article and Shopify listing item, as the inventory API returns them."""
+    """Items with their article, stock figures and Shopify listing item."""
     shopify_listing = (
         select(ChannelListingItem)
         .join(
@@ -62,36 +75,46 @@ def inventory_rows(
             shopify_listing.c.listing_item_id,
             shopify_listing.c.status,
             shopify_listing.c.last_sync_error,
+            *(item_stock.c[name] for name in FIGURES),
+            item_stock.c.next_eta,
         )
         .join(Article, Article.article_id == Item.article_id)
+        .join(item_stock, item_stock.c.item_id == Item.item_id)
         .outerjoin(shopify_listing, shopify_listing.c.item_id == Item.item_id)
         .where(*filters)
         .order_by(Article.name, Item.sku)
         .limit(limit)
         .offset(offset)
     ).all()
-    return [
-        {
-            "item_id": item.item_id,
-            "article_id": item.article_id,
-            "article_name": name,
-            "sku": item.sku,
-            "barcode": item.barcode,
-            "variant_values": item.variant_values,
-            "image_url": image_for(images, item.variant_values),
-            "stock_qty": item.stock_qty,
-            "stock_status": stock_status(item.stock_qty),
-            "status": item.status,
-            "shopify": None
-            if listing_item_id is None
-            else {
-                "listing_item_id": listing_item_id,
-                "status": listing_status,
-                "last_sync_error": sync_error,
-            },
-        }
-        for item, name, images, listing_item_id, listing_status, sync_error in rows
-    ]
+    result = []
+    for row in rows:
+        item, name, images, listing_item_id, listing_status, sync_error = row[:6]
+        figures = dict(zip(FIGURES, row[6 : 6 + len(FIGURES)], strict=True))
+        result.append(
+            {
+                "item_id": item.item_id,
+                "article_id": item.article_id,
+                "article_name": name,
+                "sku": item.sku,
+                "barcode": item.barcode,
+                "variant_values": item.variant_values,
+                "image_url": image_for(images, item.variant_values),
+                "stock_qty": figures["available"],
+                "stock_status": stock_status(figures["available"]),
+                **figures,
+                "committed": figures["open"] + figures["allocated"] + figures["shipped"],
+                "next_eta": row[-1],
+                "status": item.status,
+                "shopify": None
+                if listing_item_id is None
+                else {
+                    "listing_item_id": listing_item_id,
+                    "status": listing_status,
+                    "last_sync_error": sync_error,
+                },
+            }
+        )
+    return result
 
 
 def listed_filters(seller_id: int) -> list:
@@ -109,17 +132,23 @@ def list_inventory(
     offset: int = 0,
 ) -> dict[str, Any]:
     """The inventory list, with summary counts over every listed item (not just the
-    filtered ones), so the summary bar doesn't change while searching."""
+    filtered ones), so the summary bar doesn't change while searching. Low and out of
+    stock are judged on `available`."""
     filters = listed_filters(seller_id)
-    total, low_count, out_count = session.execute(
-        select(
-            func.count(),
-            func.count().filter(Item.stock_qty > 0, Item.stock_qty <= LOW_STOCK),
-            func.count().filter(Item.stock_qty <= 0),
-        )
+    base = (
+        select(func.count())
         .select_from(Item)
         .join(Article, Article.article_id == Item.article_id)
-        .where(*filters)
+        .join(item_stock, item_stock.c.item_id == Item.item_id)
+    )
+    available = item_stock.c.available
+    total, low_count, out_count, returning, damaged = session.execute(
+        base.add_columns(
+            func.count().filter(available > 0, available <= LOW_STOCK),
+            func.count().filter(available <= 0),
+            func.coalesce(func.sum(item_stock.c.return_pending), 0),
+            func.coalesce(func.sum(item_stock.c.damaged), 0),
+        ).where(*filters)
     ).one()
 
     if q and q.strip():
@@ -132,18 +161,17 @@ def list_inventory(
             )
         )
     if low:
-        filters.append(Item.stock_qty <= LOW_STOCK)
-    matching = session.scalar(
-        select(func.count())
-        .select_from(Item)
-        .join(Article, Article.article_id == Item.article_id)
-        .where(*filters)
-    )
-    items = inventory_rows(session, filters, limit, offset)
+        filters.append(available <= LOW_STOCK)
     return {
-        "summary": {"items": total, "low_stock": low_count, "out_of_stock": out_count},
-        "total": matching,
-        "items": items,
+        "summary": {
+            "items": total,
+            "low_stock": low_count,
+            "out_of_stock": out_count,
+            "returning": returning,
+            "damaged": damaged,
+        },
+        "total": session.scalar(base.where(*filters)),
+        "items": inventory_rows(session, filters, limit, offset),
     }
 
 
@@ -154,7 +182,14 @@ def inventory_item(session: Session, seller_id: int, item_id: int) -> dict[str, 
     return rows[0]
 
 
-# --- Adjust and history (#19) -------------------------------------------------------------
+def item_for_update(session: Session, seller_id: int, item_id: int) -> Item:
+    item = session.get(Item, item_id)
+    if item is None or item.seller_id != seller_id:
+        raise ItemNotFound(item_id)
+    return item
+
+
+# --- Manual changes -----------------------------------------------------------------------
 
 
 def adjust_stock(
@@ -164,51 +199,41 @@ def adjust_stock(
     quantity_change: int,
     reason: str,
     note: str | None,
-) -> InventoryLog:
-    """Change an item's stock by hand and log it, in the caller's transaction, with the
-    item row locked (FOR NO KEY UPDATE) so concurrent changes can't be lost. A removal may
-    not take stock below 0; adding is always allowed, even while stock is negative (oversold)."""
-    item = session.get(Item, item_id, with_for_update={"key_share": True})
-    if item is None or item.seller_id != seller_id:
-        raise ItemNotFound(item_id)
-    new_stock = item.stock_qty + quantity_change
-    if quantity_change < 0 and new_stock < 0:
-        raise AdjustmentInvalid(
-            f"Only {max(item.stock_qty, 0)} in stock, so {-quantity_change} can't be removed."
-        )
-    return log_change(session, item, quantity_change, reason, note)
+) -> stock.StockChange:
+    """Change on-hand stock by hand (reason `damage` moves units to DAMAGED)."""
+    item = item_for_update(session, seller_id, item_id)
+    return stock.adjust_onhand(session, item, quantity_change, reason, note)
 
 
-def log_change(
-    session: Session,
-    item: Item,
-    qty_change: int,
-    reason: str,
-    note: str | None,
-    order_line_id: int | None = None,
-) -> InventoryLog:
-    item.stock_qty += qty_change
-    entry = InventoryLog(
-        item_id=item.item_id,
-        qty_change=qty_change,
-        stock_after=item.stock_qty,
-        reason=reason,
-        note=note,
-        order_line_id=order_line_id,
-    )
-    session.add(entry)
-    session.flush()
-    return entry
+def change_damaged(
+    session: Session, seller_id: int, item_id: int, action: str, quantity: int, note: str | None
+) -> stock.StockChange:
+    item = item_for_update(session, seller_id, item_id)
+    return stock.change_damaged(session, item, action, quantity, note)
+
+
+# --- History ------------------------------------------------------------------------------
 
 
 def stock_history(session: Session, seller_id: int, item_id: int) -> list[dict[str, Any]]:
-    """The item's latest stock changes, newest first, with the order for order-caused ones."""
-    item = session.get(Item, item_id)
-    if item is None or item.seller_id != seller_id:
-        raise ItemNotFound(item_id)
+    """The item's latest stock changes, newest first, with the order or return behind
+    order- and return-caused ones. Rows of one event share a transaction id."""
+    item_for_update(session, seller_id, item_id)
     rows = session.execute(
-        select(InventoryLog, OrderHeader.order_header_id, OrderHeader.order_number)
-        .outerjoin(OrderLine, OrderLine.order_line_id == InventoryLog.order_line_id)
+        select(
+            InventoryLog,
+            OrderHeader.order_header_id,
+            OrderHeader.order_number,
+            Return.return_id,
+            Return.return_number,
+        )
+        .outerjoin(ReturnLine, ReturnLine.return_line_id == InventoryLog.return_line_id)
+        .outerjoin(Return, Return.return_id == ReturnLine.return_id)
+        .outerjoin(
+            OrderLine,
+            OrderLine.order_line_id
+            == func.coalesce(InventoryLog.order_line_id, ReturnLine.order_line_id),
+        )
         .outerjoin(OrderHeader, OrderHeader.order_header_id == OrderLine.order_header_id)
         .where(InventoryLog.item_id == item_id)
         .order_by(InventoryLog.created_at.desc(), InventoryLog.inventory_log_id.desc())
@@ -217,122 +242,18 @@ def stock_history(session: Session, seller_id: int, item_id: int) -> list[dict[s
     return [
         {
             "inventory_log_id": entry.inventory_log_id,
+            "side": entry.side,
+            "inv_type": entry.inv_type,
             "qty_change": entry.qty_change,
             "stock_after": entry.stock_after,
             "reason": entry.reason,
             "note": entry.note,
+            "transaction_id": str(entry.transaction_id) if entry.transaction_id else None,
             "order_header_id": order_header_id,
             "order_number": order_number,
+            "return_id": return_id,
+            "return_number": return_number,
             "created_at": entry.created_at,
         }
-        for entry, order_header_id, order_number in rows
+        for entry, order_header_id, order_number, return_id, return_number in rows
     ]
-
-
-# --- Orders (#21) -------------------------------------------------------------------------
-
-
-def counts_for_stock(order_date: datetime, item: Item) -> bool:
-    """Only orders placed after the item's starting stock was taken change it: that
-    figure (copied from Shopify by #13) already reflects every older order."""
-    return item.stock_baseline_at is None or order_date > item.stock_baseline_at
-
-
-def reconcile_order_stock(session: Session, header: OrderHeader, *, new_order: bool) -> set[int]:
-    """Bring stock in line with an order, in the caller's transaction (#21).
-
-    Each counted line should hold back ordered − cancelled − returned units. That is
-    compared with what is already logged for the line, and only the difference is
-    logged, so replays, re-imports and repeated updates never deduct twice. Returns the
-    ids of the items whose stock changed.
-    """
-    lines = [line for line in header.lines if line.variant_id]
-    if not lines:
-        return set()
-    items = {
-        item.item_id: item
-        for item in session.scalars(
-            select(Item)
-            .where(Item.item_id.in_({line.variant_id for line in lines}))
-            .order_by(Item.item_id)  # a fixed lock order, so concurrent orders can't deadlock
-            # FOR NO KEY UPDATE: stock changes still wait for each other, but not for the
-            # key-share locks that inserting order lines (FK to the item) takes.
-            .with_for_update(key_share=True)
-        )
-    }
-    logged = {
-        (line_id, item_id): (total, returned, entries)
-        for line_id, item_id, total, returned, entries in session.execute(
-            select(
-                InventoryLog.order_line_id,
-                InventoryLog.item_id,
-                func.sum(InventoryLog.qty_change),
-                func.sum(case((InventoryLog.reason == "order_returned", InventoryLog.qty_change))),
-                func.count(),
-            )
-            .where(InventoryLog.order_line_id.in_([line.order_line_id for line in lines]))
-            .group_by(InventoryLog.order_line_id, InventoryLog.item_id)
-        )
-    }
-
-    changed: set[int] = set()
-    note = f"Order {header.order_number}"
-    for line in lines:
-        item = items[line.variant_id]
-        if not counts_for_stock(header.order_date, item):
-            logger.info(
-                "Order %s line %s: placed before %s's starting stock; not counted",
-                header.order_number,
-                line.line_number,
-                item.sku,
-            )
-            continue
-        total, returned, entries = logged.get((line.order_line_id, item.item_id), (0, None, 0))
-        returned = returned or 0  # SUM of no returns is NULL
-        changes = []
-        returned_change = line.returned_qty - returned
-        if returned_change:
-            changes.append((returned_change, "order_returned"))
-        should_hold = max(line.ordered_qty - line.cancelled_qty - line.returned_qty, 0)
-        held = -(total + returned_change)
-        if should_hold > held:
-            reason = "order_created" if new_order or not entries else "order_edited"
-            changes.append((held - should_hold, reason))
-        elif should_hold < held:
-            changes.append((held - should_hold, "order_cancelled"))
-        for qty_change, reason in changes:
-            log_change(session, item, qty_change, reason, note, line.order_line_id)
-            changed.add(item.item_id)
-    return changed
-
-
-def line_stock(session: Session, header: OrderHeader) -> dict[int, dict[str, Any]]:
-    """Each line's effect on stock, for the order page: the net change logged for it,
-    or why it doesn't count."""
-    item_ids = {line.variant_id for line in header.lines if line.variant_id}
-    items = {
-        item.item_id: item
-        for item in session.scalars(select(Item).where(Item.item_id.in_(item_ids)))
-    }
-    totals = dict(
-        session.execute(
-            select(InventoryLog.order_line_id, func.sum(InventoryLog.qty_change))
-            .where(InventoryLog.order_line_id.in_([line.order_line_id for line in header.lines]))
-            .group_by(InventoryLog.order_line_id)
-        ).all()
-    )
-    effects = {}
-    for line in header.lines:
-        item = items.get(line.variant_id)
-        if item is None:
-            skipped = "not_linked"
-        elif not counts_for_stock(header.order_date, item):
-            skipped = "before_starting_stock"
-        else:
-            skipped = None
-        effects[line.order_line_id] = {
-            "item_id": item.item_id if item else None,
-            "change": totals.get(line.order_line_id, 0),
-            "not_counted": skipped,
-        }
-    return effects

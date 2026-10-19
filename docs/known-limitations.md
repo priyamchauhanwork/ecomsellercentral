@@ -17,9 +17,13 @@ Share this list with the pilot seller before onboarding (#37, #39).
 
 ## Inventory
 
-- **One stock figure per SKU,** for one location (Shopify's primary location). Multi-warehouse stock is a later phase. (#19)
-- **Cancelling in Shopify without restocking still restocks here.** The app gives back the units of a cancelled order (or of items removed by an order edit) even if "Restock items" was unticked in Shopify; the inventory page then shows that SKU as different from Shopify. Adjust it by hand. (#21)
-- **Orders placed before your products were imported don't change stock,** because the imported stock already reflected them. Their lines say so on the order page. (#21)
-- **The app's figure wins on Shopify.** Adjusting stock in the app sets Shopify's available quantity to the app's figure. Edit stock in the app, not in the Shopify admin, or the two will differ until you push the app's figure again from the inventory page. (#20)
+- **One stock location** (Shopify's primary location); purchase orders and several warehouses come later. (#49)
+- **"Delivered" comes from the courier's status in Shopify, or from Mark delivered.** Shopify only knows a parcel was delivered when the shipment has tracking; until then the units stay *shipped* (still on hand, not sellable). Mark delivered in the app when needed. A customer return also counts the units as delivered. (#52)
+- **Acknowledging is app-only.** Shopify has no "processing" state; if Shopify cancels or cuts an acknowledged order, it is applied and the order is flagged *Needs attention*. (#52)
+- **RTOs are entered by hand** on the order page; Shopify has no RTO concept. (#55)
+- **QC results are final.** For a Shopify return they are reported to Shopify, which doesn't allow changing a disposition; this needs the `write_returns` scope on the Shopify app. A return must be approved in Shopify before its QC can be reported. (#54)
+- **Refunds don't move stock any more;** only returns (approved, received, QC'd) do. (#49)
+- **Cancelling in Shopify without restocking still frees the units here** (they were never shipped, so they are still on the shelf). (#49)
+- **Orders placed before your products were imported don't hold stock,** because the imported figure already reflected them. Their lines say so on the order page. (#21)
+- **The app's figure wins on Shopify.** Adjusting stock in the app sets Shopify's available quantity to the app's figure. Edit stock in the app, not in the Shopify admin, or push the app's figure from the inventory page. (#20)
 - **A sale on Shopify in the seconds between its order and the app receiving it can be overwritten** by a manual adjustment made in exactly that window; the inventory page then shows the difference. (#20)
-

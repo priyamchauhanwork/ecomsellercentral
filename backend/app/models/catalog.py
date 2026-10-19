@@ -43,11 +43,16 @@ class Seller(TimestampMixin, Base):
     """A tenant of the app."""
 
     __tablename__ = "ecs_sellers"
-    __table_args__ = (CheckConstraint(in_check("status", SELLER_STATUSES), name="status"),)
+    __table_args__ = (
+        CheckConstraint(in_check("status", SELLER_STATUSES), name="status"),
+        CheckConstraint("return_eta_days > 0", name="return_eta_days_positive"),
+    )
 
     seller_id: Mapped[int] = bigint_pk()
     name: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), server_default="active")
+    # Days after a return is approved that its units are expected back (inventory ERD).
+    return_eta_days: Mapped[int] = mapped_column(Integer, server_default="10")
 
 
 class Channel(TimestampMixin, Base):
@@ -136,6 +141,8 @@ class Item(TimestampMixin, Base):
     __tablename__ = "ecs_items"
     __table_args__ = (
         UniqueConstraint("seller_id", "sku"),
+        # Target of the inventory tables' composite foreign keys.
+        UniqueConstraint("item_id", "seller_id"),
         # seller_id is copied from the article (for the SKU constraint); this keeps it equal.
         ForeignKeyConstraint(
             ["article_id", "seller_id"],
@@ -229,36 +236,3 @@ class ChannelListingItem(TimestampMixin, Base):
     last_sync_error: Mapped[str | None] = mapped_column(Text)  # last error from the channel
 
     listing: Mapped[ChannelListing] = relationship(back_populates="items")
-
-
-# --- Inventory (#19, #21) -----------------------------------------------------------------
-
-MANUAL_STOCK_REASONS = ("restock", "damage", "correction", "return", "other")
-ORDER_STOCK_REASONS = ("order_created", "order_cancelled", "order_returned", "order_edited")
-
-
-class InventoryLog(Base):
-    """Append-only stock history: every change to ecs_items.stock_qty, manual or caused
-    by an order line (#21 reconciles per line against what is already logged here)."""
-
-    __tablename__ = "ecs_inventory_log"
-    __table_args__ = (
-        Index(None, "item_id", "created_at"),
-        Index(None, "order_line_id"),
-        CheckConstraint(
-            in_check("reason", (*MANUAL_STOCK_REASONS, *ORDER_STOCK_REASONS)), name="reason"
-        ),
-        CheckConstraint("qty_change <> 0", name="qty_change_non_zero"),
-    )
-
-    inventory_log_id: Mapped[int] = bigint_pk()
-    item_id: Mapped[int] = mapped_column(ForeignKey("ecs_items.item_id"))
-    qty_change: Mapped[int] = mapped_column(Integer)
-    stock_after: Mapped[int] = mapped_column(Integer)  # stock_qty once this change applied
-    reason: Mapped[str] = mapped_column(String(20))
-    note: Mapped[str | None] = mapped_column(Text)
-    order_line_id: Mapped[int | None] = mapped_column(ForeignKey("ecs_order_line.order_line_id"))
-    created_by: Mapped[int | None] = mapped_column(BigInteger)  # FK once a users table exists
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=text("now()")
-    )

@@ -16,7 +16,18 @@ from app.db import SessionLocal
 from app.services.order_ingestion import ensure_shopify_account
 from app.services.shopify import ShopifyConfigError, ShopifyError, get_shopify_client
 
-TOPICS = {"ORDERS_CREATE": "orders/create", "ORDERS_UPDATED": "orders/updated"}
+TOPICS = {
+    "ORDERS_CREATE": "orders/create",
+    "ORDERS_UPDATED": "orders/updated",
+    # Returns (#53): only available as GraphQL subscriptions; need read_returns.
+    "RETURNS_REQUEST": "returns/request",
+    "RETURNS_APPROVE": "returns/approve",
+    "RETURNS_DECLINE": "returns/decline",
+    "RETURNS_CANCEL": "returns/cancel",
+    "RETURNS_CLOSE": "returns/close",
+    "RETURNS_REOPEN": "returns/reopen",
+    "REVERSE_FULFILLMENT_ORDERS_DISPOSE": "reverse_fulfillment_orders/dispose",
+}
 
 LIST = "{ webhookSubscriptions(first: 100) { nodes { id topic uri } } }"
 CREATE = """mutation ($topic: WebhookSubscriptionTopic!, $uri: String!) {

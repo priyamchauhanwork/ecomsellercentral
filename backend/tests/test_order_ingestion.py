@@ -44,6 +44,9 @@ class FakeShopify:
     def access_scopes(self):
         return self.scopes
 
+    def graphql(self, query, variables=None):  # the returns read after each sync: none
+        return {"nodes": []}
+
     def paginate(self, path, key, params=None):
         self.params = params
         for index, order in enumerate(self.orders):

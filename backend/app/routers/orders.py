@@ -15,8 +15,17 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.auth import require_api_key
 from app.db import get_db
-from app.models import Article, Item, OrderHeader, OrderImport, OrderImportRow, OrderLine
-from app.services import inventory, order_ingestion, stock_sync
+from app.models import (
+    Article,
+    Item,
+    OrderHeader,
+    OrderHistory,
+    OrderImport,
+    OrderImportRow,
+    OrderLine,
+    Return,
+)
+from app.services import order_ingestion, returns, stock, stock_sync
 from app.services.order_status import OrderStatus, StatusChangeNotAllowed, change_order_status
 from app.services.product_import import image_for
 from app.services.shopify import ShopifyConfigError, ShopifyError
@@ -145,6 +154,9 @@ class OrderSummary(BaseModel):
     fulfillment_status: str
     currency: str
     total_amount: Decimal
+    # Set when Shopify cancelled or cut an order the team had acknowledged (#52).
+    attention_reason: str | None
+    attention_at: datetime | None
     line_count: int = 0  # not a column; set from a count query or the loaded lines
 
 
@@ -154,10 +166,16 @@ class OrderList(BaseModel):
 
 
 class LineStock(BaseModel):
+    """The line's place in stock (docs/inventory-erd.md): its demand by type and the
+    units that left on-hand stock by delivery or RTO, or why it doesn't count."""
+
     item_id: int | None
-    change: int  # net units logged for this line: −2 deducted, +2 restocked
-    # Why the line doesn't change stock: not linked to a catalog item, or the order was
-    # placed before the item's starting stock was taken.
+    open: int
+    allocated: int
+    shipped: int
+    delivered: int
+    rto: int
+    # Not linked to a catalog item, or the order was placed before the starting stock.
     not_counted: Literal["not_linked", "before_starting_stock"] | None
 
 
@@ -175,6 +193,7 @@ class OrderLineOut(BaseModel):
     hsn_code: str | None
     ordered_qty: int
     shipped_qty: int
+    delivered_qty: int
     cancelled_qty: int
     returned_qty: int
     unit_price: Decimal
@@ -209,6 +228,14 @@ class OrderHistoryOut(BaseModel):
     order_import_id: int | None
     remarks: str | None
     changed_at: datetime
+
+
+class OrderReturn(BaseModel):
+    return_id: int
+    return_number: str
+    return_type: str
+    status: str
+    expected_at: date | None
 
 
 class OrderDetail(OrderSummary):
@@ -253,6 +280,7 @@ class OrderDetail(OrderSummary):
     updated_at: datetime
     lines: list[OrderLineOut]
     history: list[OrderHistoryOut]
+    returns: list[OrderReturn] = []  # returns and RTOs of this order (#53–#55)
 
 
 class StatusChange(BaseModel):
@@ -263,6 +291,7 @@ class StatusChange(BaseModel):
 @router.get("", response_model=OrderList)
 def list_orders(
     status: OrderStatus | None = None,
+    attention: bool = False,
     from_date: date | None = Query(None, alias="from", description="YYYY-MM-DD, IST"),
     to_date: date | None = Query(None, alias="to", description="YYYY-MM-DD, IST, inclusive"),
     q: str | None = Query(None, max_length=100, description="Order number, customer or phone"),
@@ -276,6 +305,8 @@ def list_orders(
     filters = [OrderHeader.is_deleted.is_(False)]
     if status:
         filters.append(OrderHeader.order_status == status)
+    if attention:
+        filters.append(OrderHeader.attention_reason.is_not(None))
     if from_date:
         filters.append(OrderHeader.order_date >= datetime.combine(from_date, time.min, IST))
     if to_date:
@@ -337,10 +368,18 @@ def load_order(db: Session, order_id: int, *, for_update: bool = False) -> Order
 def order_detail(db: Session, header: OrderHeader) -> OrderDetail:
     detail = OrderDetail.model_validate(header).model_copy(update={"line_count": len(header.lines)})
     images = line_images(db, header.lines)
-    stock = inventory.line_stock(db, header)
+    line_stock = stock.line_demand(db, header)
+    detail.returns = [
+        OrderReturn.model_validate(ret, from_attributes=True)
+        for ret in db.scalars(
+            select(Return)
+            .where(Return.order_header_id == header.order_header_id)
+            .order_by(Return.return_id)
+        )
+    ]
     for line in detail.lines:
         line.image_url = images.get(line.order_line_id)
-        line.stock = LineStock(**stock[line.order_line_id])
+        line.stock = LineStock(**line_stock[line.order_line_id])
     return detail
 
 
@@ -384,8 +423,9 @@ def update_order_status(
     open, then the order status is recalculated; header and line history are written.
 
     Allowed: pending → shipped / delivered / cancelled, shipped → delivered.
-    Setting the current status again changes nothing. Cancelling restocks the lines'
-    items (#21) and, as Shopify doesn't know about it, pushes the new stock there (#20).
+    Setting the current status again changes nothing. "processing" is Acknowledge (#52).
+    Stock follows (docs/inventory-erd.md); a cancellation frees units, and as Shopify
+    doesn't know about it, the new figure is pushed there (#20).
     """
     header = load_order(db, order_id, for_update=True)
     try:
@@ -394,10 +434,75 @@ def update_order_status(
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     if changed:
-        restocked = inventory.reconcile_order_stock(db, header, new_order=False)
+        changed_items = stock.reconcile_order(db, header).finish()
         db.commit()
-        if restocked:
-            background_tasks.add_task(stock_sync.sync_items, restocked)
+        if changed_items:
+            background_tasks.add_task(stock_sync.sync_items, changed_items)
         db.expire_all()
         header = load_order(db, order_id)
     return order_detail(db, header)
+
+
+@router.post("/{order_id}/attention/clear", response_model=OrderDetail)
+def clear_attention(order_id: int, db: Session = Depends(get_db)):
+    """The team has dealt with the flag (e.g. stopped packing a cancelled order)."""
+    header = load_order(db, order_id, for_update=True)
+    if header.attention_reason:
+        header.version_no += 1
+        db.add(
+            OrderHistory(
+                order_header_id=header.order_header_id,
+                version_no=header.version_no,
+                action_type="attention_cleared",
+                change_source="admin_ui",
+                changed_fields={"attention_reason": [header.attention_reason, None]},
+            )
+        )
+        header.attention_reason = None
+        header.attention_at = None
+        db.commit()
+        db.expire_all()
+        header = load_order(db, order_id)
+    return order_detail(db, header)
+
+
+class RtoLine(BaseModel):
+    order_line_id: int
+    quantity: int = Field(gt=0, le=100_000)
+
+
+class RtoRequest(BaseModel):
+    lines: list[RtoLine] = Field(min_length=1)
+    note: str | None = Field(None, max_length=500)
+
+
+@router.get("/{order_id}/returns", response_model=list[OrderReturn])
+def order_returns(order_id: int, db: Session = Depends(get_db)):
+    """The order's returns and RTOs, oldest first."""
+    load_order(db, order_id)
+    return [
+        OrderReturn.model_validate(ret, from_attributes=True)
+        for ret in db.scalars(
+            select(Return).where(Return.order_header_id == order_id).order_by(Return.return_id)
+        )
+    ]
+
+
+@router.post("/{order_id}/rto", response_model=OrderReturn, status_code=201)
+def mark_rto(order_id: int, body: RtoRequest, db: Session = Depends(get_db)):
+    """Shipped, undelivered units are coming back (#55): creates an RTO return. Their
+    demand leaves SHIPPED and on-hand stock, and they wait as RETURN_PENDING until QC."""
+    header = load_order(db, order_id, for_update=True)
+    quantities: dict[int, int] = {}
+    for line in body.lines:
+        quantities[line.order_line_id] = quantities.get(line.order_line_id, 0) + line.quantity
+    try:
+        ret = returns.create_rto(db, header, quantities, body.note)
+        changed = stock.reconcile_order(db, header).finish()
+    except returns.ReturnInvalid as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    if changed:  # an RTO doesn't change available; pushed only if something was off
+        stock_sync.sync_items(changed)
+    return OrderReturn.model_validate(ret, from_attributes=True)

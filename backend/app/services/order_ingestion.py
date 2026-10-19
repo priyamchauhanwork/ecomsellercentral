@@ -31,8 +31,10 @@ from app.models import (
     OrderImportRow,
     OrderLine,
     OrderLineHistory,
+    Return,
+    ReturnLine,
 )
-from app.services.inventory import reconcile_order_stock
+from app.services import returns, stock_sync
 from app.services.order_mapping import (
     LINE_STATUS_RANK,
     MappedOrder,
@@ -50,6 +52,7 @@ from app.services.shopify import (
     get_shopify_client,
     normalize_store_domain,
 )
+from app.services.stock import ACKNOWLEDGED_LINE_STATUSES, reconcile_order
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,7 @@ SYNC_OVERLAP = timedelta(minutes=5)
 SHOPIFY_CHANNEL_CODE = "SHOPIFY"  # ecs_channels.code
 # Rows whose payload we are consistent with; the newest one's hash is "last applied".
 CONSISTENT_ACTIONS = ("created", "updated", "unchanged")
-ORDER_STATUS_RANK = {"pending": 0, "shipped": 1, "delivered": 2, "cancelled": 3}
+ORDER_STATUS_RANK = {"pending": 0, "processing": 1, "shipped": 2, "delivered": 3, "cancelled": 4}
 ORDER_CREATE_RACE_CONSTRAINTS = {
     "uq_ecs_order_header_seller_id_channel_external_order_id",
     "uq_ecs_order_header_order_number",
@@ -80,10 +83,22 @@ LINE_FIELDS_KEPT = {"line_number", "product_id", "variant_id"}
 LINE_SHIPPING_FIELDS = {
     "line_status",
     "shipped_qty",
+    "delivered_qty",
     "shipped_at",
     "delivered_at",
     "courier_name",
     "tracking_number",
+}
+
+# Return webhooks (#53): GraphQL subscriptions only; processed by apply_return_row().
+RETURN_TOPICS = {
+    "returns/request",
+    "returns/approve",
+    "returns/decline",
+    "returns/cancel",
+    "returns/close",
+    "returns/reopen",
+    "reverse_fulfillment_orders/dispose",
 }
 
 # Swapped out in tests.
@@ -258,6 +273,7 @@ def run_shopify_order_import(
                 updated = timestamp(order.get("updated_at"), [], "updated_at")
                 if updated and (newest_seen is None or updated > newest_seen):
                     newest_seen = updated
+            sync_run_returns(session_factory, shopify, order_import_id)
     except ShopifyError as exc:
         fetch_error = f"Shopify request failed: {exc}. {exc.body[:300]}"
         if "protected customer data" in exc.body:
@@ -327,8 +343,58 @@ def run_webhook_import(
 ) -> None:
     """Process a recorded webhook delivery (one row) and close its run."""
     mark_processing(session_factory, order_import_id)
-    process_import_row(row_id, session_factory=session_factory)
+    action = process_import_row(row_id, session_factory=session_factory)
     finish_import(session_factory, order_import_id, None)
+    if action == "updated":
+        push_return_stock(session_factory, row_id)
+
+
+def sync_run_returns(
+    session_factory: sessionmaker[Session], shopify: ShopifyClient, order_import_id: int
+) -> None:
+    """Read the returns of the run's shipped orders, so a missed return webhook is caught
+    (#53). A failure here is logged; the orders themselves are already saved."""
+    with session_factory() as session:
+        header_ids = list(
+            session.scalars(
+                select(OrderImportRow.order_header_id)
+                .where(
+                    OrderImportRow.order_import_id == order_import_id,
+                    OrderImportRow.order_header_id.is_not(None),
+                )
+                .distinct()
+            )
+        )
+        header_ids = returns.fulfilled_order_ids(session, get_settings().seller_id, header_ids)
+    if not header_ids:
+        return
+    try:
+        result = returns.sync_returns(session_factory, shopify, header_ids)
+    except Exception:  # never fails the order run; the next sync tries again
+        logger.exception("Reading returns for import %s failed", order_import_id)
+        return
+    if result["items"]:
+        stock_sync.sync_items(result["items"], session_factory=session_factory)
+
+
+def push_return_stock(session_factory: sessionmaker[Session], row_id: int) -> None:
+    """After a return webhook (e.g. QC recorded in Shopify), push the returned items."""
+    with session_factory() as session:
+        row = session.get(OrderImportRow, row_id)
+        run = session.get(OrderImport, row.order_import_id)
+        if run.event_topic not in RETURN_TOPICS or row.order_header_id is None:
+            return
+        item_ids = set(
+            session.scalars(
+                select(ReturnLine.item_id)
+                .join(Return, Return.return_id == ReturnLine.return_id)
+                .where(
+                    Return.order_header_id == row.order_header_id, ReturnLine.item_id.is_not(None)
+                )
+            )
+        )
+    if item_ids:
+        stock_sync.sync_items(item_ids, session_factory=session_factory)
 
 
 def mark_processing(session_factory: sessionmaker[Session], order_import_id: int) -> None:
@@ -453,7 +519,37 @@ def bump_counters(session: Session, order_import_id: int, action: str) -> None:
     )
 
 
+def apply_return_row(session: Session, run: OrderImport, row: OrderImportRow) -> tuple[str, int]:
+    """A return webhook (#53): read the order's returns from Shopify (the current state,
+    so delivery order doesn't matter) and apply them."""
+    payload = row.raw_payload if isinstance(row.raw_payload, dict) else {}
+    with shopify_client_factory() as shopify:
+        order_id = returns.order_id_from_payload(shopify, payload)
+        if not order_id:
+            raise OrderMappingError(["The return webhook names no order"])
+        header = session.scalars(
+            select(OrderHeader)
+            .where(
+                OrderHeader.seller_id == run.seller_id,
+                OrderHeader.channel == run.channel,
+                OrderHeader.external_order_id == order_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if header is None:
+            raise OrderMappingError(
+                [f"Order {order_id} isn't imported yet; the next order sync reads its returns"]
+            )
+        nodes = returns.fetch_returns(shopify, [order_id]).get(order_id, [])
+    row.external_order_id = order_id
+    changed = returns.apply_shopify_returns(session, header, nodes, run.order_import_id)
+    reconcile_order(session, header).finish()
+    return ("updated" if changed else "unchanged"), header.order_header_id
+
+
 def apply_order_row(session: Session, run: OrderImport, row: OrderImportRow) -> tuple[str, int]:
+    if run.event_topic in RETURN_TOPICS:
+        return apply_return_row(session, run, row)
     mapped = map_shopify_order(row.raw_payload)
     header = session.scalars(
         select(OrderHeader)
@@ -523,7 +619,7 @@ def create_order(
     session.flush()
     for line in header.lines:  # link to the catalog when the products are imported (#13)
         link_line(session, run.channel_account_id, run.seller_id, line, row.raw_payload)
-    reconcile_order_stock(session, header, new_order=True)  # #21; Shopify did its own
+    reconcile_order(session, header, new_order=True).finish()  # Shopify did its own stock
 
     session.add(
         OrderHistory(
@@ -566,6 +662,9 @@ def apply_line_values(line: OrderLine, values: dict[str, Any]) -> dict[str, Any]
     """Apply mapped values, never moving the status backwards. Returns the diff."""
     values = {k: v for k, v in values.items() if k not in LINE_FIELDS_KEPT}
     old_status = line.line_status
+    if values["line_status"] == "pending" and old_status in ACKNOWLEDGED_LINE_STATUSES:
+        # Shopify has no "acknowledged": its pending (also partly shipped) keeps ours.
+        values["line_status"] = old_status
     new_status = values["line_status"]
     if old_status != new_status and (
         old_status in ("cancelled", "returned")
@@ -589,6 +688,12 @@ def update_order(
     mapped: MappedOrder,
 ) -> bool:
     """Apply a newer version of an existing order. Returns False if nothing changed."""
+    # Units the team acknowledged, to flag a Shopify cancel or cut of them.
+    acknowledged_before = {
+        line.order_line_id: line.ordered_qty - line.cancelled_qty
+        for line in header.lines
+        if line.line_status in ACKNOWLEDGED_LINE_STATUSES
+    }
     line_diffs: dict[str, Any] = {}
     line_history: list[tuple[OrderLine, str, str, str]] = []
     existing = {line.external_line_id: line for line in header.lines}
@@ -679,8 +784,28 @@ def update_order(
                 **history_ids(run, row),
             )
         )
-    reconcile_order_stock(session, header, new_order=False)  # #21; Shopify did its own
+    flag_acknowledged_changes(header, acknowledged_before)
+    reconcile_order(session, header).finish()  # Shopify did its own stock
     return True
+
+
+def flag_acknowledged_changes(header: OrderHeader, acknowledged_before: dict[int, int]) -> None:
+    """Shopify cancelled, or removed units from, an order the team already acknowledged:
+    the change is applied, and the order is flagged so the team stops packing it."""
+    if not acknowledged_before:
+        return
+    if header.order_status == "cancelled":
+        reason = "cancelled_after_acknowledgement"
+    elif any(
+        line.ordered_qty - line.cancelled_qty < acknowledged_before[line.order_line_id]
+        for line in header.lines
+        if line.order_line_id in acknowledged_before
+    ):
+        reason = "edited_after_acknowledgement"
+    else:
+        return
+    header.attention_reason = reason
+    header.attention_at = utcnow()
 
 
 # --- Scheduled and manual sync (#12) ------------------------------------------------------

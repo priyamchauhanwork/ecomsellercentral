@@ -7,9 +7,15 @@ from app.models.catalog import (
     ChannelAccount,
     ChannelListing,
     ChannelListingItem,
-    InventoryLog,
     Item,
     Seller,
+)
+from app.models.inventory import (
+    InventoryDemand,
+    InventoryLog,
+    InventorySupply,
+    Return,
+    ReturnLine,
 )
 from app.models.orders import (
     OrderHeader,
@@ -27,7 +33,9 @@ __all__ = [
     "ChannelAccount",
     "ChannelListing",
     "ChannelListingItem",
+    "InventoryDemand",
     "InventoryLog",
+    "InventorySupply",
     "Item",
     "Seller",
     "OrderHeader",
@@ -36,4 +44,6 @@ __all__ = [
     "OrderImportRow",
     "OrderLine",
     "OrderLineHistory",
+    "Return",
+    "ReturnLine",
 ]
