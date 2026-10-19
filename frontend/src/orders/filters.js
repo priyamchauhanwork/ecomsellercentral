@@ -4,6 +4,7 @@
 export const ORDER_STATUSES = [
   { value: "", label: "All" },
   { value: "pending", label: "Pending" },
+  { value: "processing", label: "Processing" },
   { value: "shipped", label: "Shipped" },
   { value: "delivered", label: "Delivered" },
   { value: "cancelled", label: "Cancelled" },
@@ -29,6 +30,7 @@ export function readFilters(searchParams) {
     from: validDate(searchParams.get("from")),
     to: validDate(searchParams.get("to")),
     q: (searchParams.get("q") ?? "").trim().slice(0, SEARCH_MAX_LENGTH),
+    attention: searchParams.get("attention") === "true" ? "true" : "",
   };
 }
 

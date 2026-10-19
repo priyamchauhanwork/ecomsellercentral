@@ -53,8 +53,11 @@ export default function StatusChangePanel({ order, change, onSaved, onCancel, on
         </strong>
       </p>
       <p className="muted">
-        {affectedItems} {affectedItems === 1 ? "item" : "items"} will be marked {change.status}.
-        This updates SellerCentral only: Shopify isn&apos;t changed, so fulfil the order there too.
+        {change.status === "processing"
+          ? `${affectedItems} ${affectedItems === 1 ? "item" : "items"} will be acknowledged: their stock is held as allocated while the order is packed.`
+          : `${affectedItems} ${affectedItems === 1 ? "item" : "items"} will be marked ${change.status}.`}{" "}
+        This updates SellerCentral only: Shopify isn&apos;t changed
+        {change.status === "processing" ? "." : ", so fulfil the order there too."}
       </p>
       <label className="field">
         <span>Note for the timeline (optional)</span>

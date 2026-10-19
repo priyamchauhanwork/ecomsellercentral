@@ -188,14 +188,17 @@ describe("Order detail", () => {
           ...line,
           stock:
             line.line_number === 1
-              ? { item_id: 7, change: -2, not_counted: null }
-              : { item_id: null, change: 0, not_counted: "not_linked" },
+              ? { item_id: 7, open: 1, allocated: 0, shipped: 1, delivered: 0, rto: 0, not_counted: null }
+              : { item_id: null, open: 0, allocated: 0, shipped: 0, delivered: 0, rto: 0, not_counted: "not_linked" },
         })),
       }),
     );
     renderAt("/orders/10");
     const rows = (await screen.findAllByRole("row")).slice(1);
-    expect(within(rows[0]).getByRole("link", { name: "Stock −2" })).toHaveAttribute("href", "/inventory/7");
+    expect(within(rows[0]).getByRole("link", { name: "Stock: 1 open · 1 shipped" })).toHaveAttribute(
+      "href",
+      "/inventory/7",
+    );
     expect(rows[1]).toHaveTextContent("Stock: not linked to a product");
   });
 
@@ -486,3 +489,77 @@ describe("Product images", () => {
     expect(within(rows[1]).getByRole("img", { name: "No image for Strap" })).toBeInTheDocument();
   });
 });
+
+// --- Acknowledge, attention, RTO and returns (#52, #55) ------------------------------------
+
+describe("Supply & demand on the order page", () => {
+  it("acknowledges a pending order", async () => {
+    const fetchMock = mockApi(
+      respond(ORDER),
+      respond({ ...ORDER, order_status: "processing", lines: ORDER.lines.map((line) => ({ ...line, line_status: "allocated" })) }),
+    );
+    renderAt("/orders/10");
+    const actions = await screen.findByRole("group", { name: "Order actions" });
+    expect(within(actions).getByRole("button", { name: "Mark shipped" })).toBeEnabled();
+    await userEvent.click(within(actions).getByRole("button", { name: "Acknowledge" }));
+    const panel = screen.getByRole("form", { name: "Acknowledge confirmation" });
+    expect(panel).toHaveTextContent("will be acknowledged: their stock is held as allocated");
+    await userEvent.click(within(panel).getByRole("button", { name: "Yes, acknowledge" }));
+    expect(await screen.findByText("Order marked as processing.")).toBeInTheDocument();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).status).toBe("processing");
+    expect(within(actions).queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
+  });
+
+  it("shows the attention flag and dismisses it", async () => {
+    const flagged = { ...ORDER, order_status: "cancelled", attention_reason: "cancelled_after_acknowledgement" };
+    const fetchMock = mockApi(respond(flagged), respond({ ...flagged, attention_reason: null }));
+    renderAt("/orders/10");
+    const banner = await screen.findByRole("alert");
+    expect(banner).toHaveTextContent("Shopify cancelled this order after the team acknowledged it");
+    await userEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(await screen.findByText("Flag dismissed.")).toBeInTheDocument();
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/orders/10/attention/clear");
+    expect(screen.queryByText(/Needs attention\./)).not.toBeInTheDocument();
+  });
+
+  it("marks shipped, undelivered units as RTO", async () => {
+    const shipped = {
+      ...ORDER,
+      order_status: "shipped",
+      lines: [{ ...LINE, line_status: "shipped", shipped_qty: 2, delivered_qty: 0, stock: { item_id: 7, open: 0, allocated: 0, shipped: 2, delivered: 0, rto: 0, not_counted: null } }],
+    };
+    const fetchMock = mockApi(
+      respond(shipped),
+      respond({ return_id: 4, return_number: "#1001-RTO1", return_type: "rto", status: "open", expected_at: "2026-10-29" }, 201),
+      respond(shipped),
+    );
+    renderAt("/orders/10");
+    await userEvent.click(await screen.findByRole("button", { name: "Mark RTO" }));
+    const panel = screen.getByRole("form", { name: "Mark RTO" });
+    const quantity = within(panel).getByLabelText("RTO quantity for WATCH-BLK-42");
+    expect(quantity).toHaveValue("2");
+    await userEvent.clear(quantity);
+    await userEvent.type(quantity, "3");
+    await userEvent.click(within(panel).getByRole("button", { name: "Create RTO" }));
+    expect(within(panel).getByRole("alert")).toHaveTextContent("enter a whole number from 0 to 2");
+    await userEvent.clear(quantity);
+    await userEvent.type(quantity, "1");
+    await userEvent.click(within(panel).getByRole("button", { name: "Create RTO" }));
+    expect(await screen.findByText(/RTO #1001-RTO1 created/)).toBeInTheDocument();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ lines: [{ order_line_id: 1, quantity: 1 }], note: null });
+  });
+
+  it("lists the order's returns", async () => {
+    mockApi(
+      respond({
+        ...ORDER,
+        returns: [{ return_id: 4, return_number: "#1001-R1", return_type: "customer_return", status: "open", expected_at: "2026-10-29" }],
+      }),
+    );
+    renderAt("/orders/10");
+    const link = await screen.findByRole("link", { name: "#1001-R1" });
+    expect(link).toHaveAttribute("href", "/returns/4");
+    expect(link.closest("li")).toHaveTextContent("expected 2026-10-29");
+  });
+});
+

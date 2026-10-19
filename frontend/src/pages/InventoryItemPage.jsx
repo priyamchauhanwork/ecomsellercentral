@@ -12,10 +12,43 @@ import {
   quantityChange,
   reasonLabel,
   signed,
+  typeLabel,
   variantLabel,
 } from "../inventory/stock";
 
 const EMPTY_FORM = { mode: "add", quantity: "", reason: "", note: "" };
+
+// The item's supply and demand (docs/inventory-erd.md), as cards.
+function Figures({ item }) {
+  const cards = [
+    { label: "Available", value: item.available, hint: "On hand − committed; what Shopify shows", main: true },
+    { label: "On hand", value: item.onhand, hint: "Incl. shipped units until delivered" },
+    { label: "On the shelf", value: item.on_shelf, hint: "On hand − shipped: what a count should find" },
+    {
+      label: "Committed",
+      value: item.committed,
+      hint: `${item.open} open · ${item.allocated} allocated · ${item.shipped} shipped`,
+    },
+    {
+      label: "Returning",
+      value: item.return_pending,
+      hint: item.return_pending ? `Next expected ${item.next_eta ?? "—"}` : "Nothing on its way back",
+    },
+    { label: "Damaged", value: item.damaged, hint: "Not sellable" },
+    { label: "Future available", value: item.future_available, hint: "Available + returning" },
+  ];
+  return (
+    <div className="figure-cards" aria-label="Stock figures">
+      {cards.map((card) => (
+        <div key={card.label} className={card.main ? "figure main" : "figure"}>
+          <span className="small">{card.label}</span>
+          <strong>{card.value}</strong>
+          <span className="muted small">{card.hint}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function AdjustForm({ item, onSaved }) {
   const [form, setForm] = useState(EMPTY_FORM);
@@ -23,15 +56,20 @@ function AdjustForm({ item, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState(null);
   const change = quantityChange(form.mode, form.quantity);
+  const reasons = MANUAL_REASONS.filter((reason) => form.mode === "remove" || !reason.removeOnly);
 
   function update(changes) {
-    setForm((current) => ({ ...current, ...changes }));
+    setForm((current) => {
+      const next = { ...current, ...changes };
+      if (next.mode === "add" && next.reason === "damage") next.reason = "";
+      return next;
+    });
     setErrors({});
   }
 
   async function save(event) {
     event.preventDefault();
-    const found = adjustmentErrors(form, item.stock_qty);
+    const found = adjustmentErrors(form, item.on_shelf);
     setErrors(found);
     if (Object.keys(found).length) return;
     setSaving(true);
@@ -43,11 +81,17 @@ function AdjustForm({ item, onSaved }) {
       });
       const sync = describeSync(result);
       setOutcome({
-        tone: sync.tone,
-        text: `Stock updated: ${item.stock_qty} → ${result.item.stock_qty}. ${sync.text}`,
+        tone: result.warning || sync.tone === "error" ? "error" : "success",
+        text: [
+          `On hand: ${item.onhand} → ${result.item.onhand}; available ${result.item.available}.`,
+          result.warning,
+          sync.text,
+        ]
+          .filter(Boolean)
+          .join(" "),
       });
       setForm(EMPTY_FORM);
-      onSaved(result.item);
+      onSaved();
     } catch (error) {
       setOutcome({ tone: "error", text: `Not saved: ${error.message}` });
     } finally {
@@ -57,7 +101,7 @@ function AdjustForm({ item, onSaved }) {
 
   return (
     <form className="card adjust-form" onSubmit={save} noValidate>
-      <h2>Adjust stock</h2>
+      <h2>Adjust on-hand stock</h2>
       {outcome && (
         <p className={`notice ${outcome.tone}`} role="status">
           {outcome.text}
@@ -98,7 +142,7 @@ function AdjustForm({ item, onSaved }) {
         <span>Reason *</span>
         <select value={form.reason} onChange={(event) => update({ reason: event.target.value })} aria-invalid={Boolean(errors.reason)}>
           <option value="">Choose a reason</option>
-          {MANUAL_REASONS.map((reason) => (
+          {reasons.map((reason) => (
             <option key={reason.value} value={reason.value}>
               {reason.label}
             </option>
@@ -115,7 +159,8 @@ function AdjustForm({ item, onSaved }) {
         <textarea rows={2} maxLength={500} value={form.note} onChange={(event) => update({ note: event.target.value })} />
       </label>
       <p className="preview" aria-live="polite">
-        Current <strong>{item.stock_qty}</strong> → New <strong>{change === null ? "—" : item.stock_qty + change}</strong>
+        On hand <strong>{item.onhand}</strong> → <strong>{change === null ? "—" : item.onhand + change}</strong> · available{" "}
+        <strong>{change === null ? item.available : item.available + change}</strong>
       </p>
       <button type="submit" className="button" disabled={saving}>
         {saving ? "Saving…" : "Save adjustment"}
@@ -124,9 +169,77 @@ function AdjustForm({ item, onSaved }) {
   );
 }
 
+// Repair (back on hand) or write off damaged units.
+function DamagedActions({ item, onSaved }) {
+  const [quantity, setQuantity] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  if (item.damaged <= 0) return null;
+
+  async function act(action) {
+    const text = quantity.trim();
+    if (!/^\d+$/.test(text) || Number(text) === 0 || Number(text) > item.damaged) {
+      setError(`Enter a whole number from 1 to ${item.damaged}.`);
+      return;
+    }
+    setBusy(action);
+    setError("");
+    try {
+      await api(`/inventory/${item.item_id}/damaged`, { method: "POST", body: { action, quantity: Number(text) } });
+      setQuantity("");
+      onSaved();
+    } catch (problem) {
+      setError(problem.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="card damaged-actions">
+      <h2>Damaged units ({item.damaged})</h2>
+      <label className="field">
+        <span>Quantity</span>
+        <input inputMode="numeric" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
+      </label>
+      {error && (
+        <span className="form-error small" role="alert">
+          {error}
+        </span>
+      )}
+      <div className="actions">
+        <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => act("repair")}>
+          {busy === "repair" ? "Saving…" : "Repair (back on hand)"}
+        </button>
+        <button type="button" className="button secondary" disabled={Boolean(busy)} onClick={() => act("write_off")}>
+          {busy === "write_off" ? "Saving…" : "Write off"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Source({ entry }) {
+  if (entry.return_id) {
+    return (
+      <Link to={`/returns/${entry.return_id}`} className="order-link">
+        Return {entry.return_number}
+      </Link>
+    );
+  }
+  if (entry.order_header_id) {
+    return (
+      <Link to={`/orders/${entry.order_header_id}`} className="order-link">
+        Order {entry.order_number}
+      </Link>
+    );
+  }
+  return entry.side === null || entry.reason === "migration" || entry.reason === "opening_stock" ? "System" : "Manual";
+}
+
 function History({ entries }) {
   if (entries.length === 0) {
-    return <EmptyState title="No stock changes yet">Adjustments and orders will show here.</EmptyState>;
+    return <EmptyState title="No stock changes yet">Adjustments, orders and returns will show here.</EmptyState>;
   }
   return (
     <div className="table-wrap flat">
@@ -134,32 +247,31 @@ function History({ entries }) {
         <thead>
           <tr>
             <th scope="col">Date</th>
+            <th scope="col">Figure</th>
             <th scope="col" className="number">Change</th>
-            <th scope="col" className="number">Stock after</th>
+            <th scope="col" className="number">After</th>
             <th scope="col">Reason</th>
             <th scope="col">Source</th>
             <th scope="col">Note</th>
           </tr>
         </thead>
         <tbody>
-          {entries.map((entry) => (
-            <tr key={entry.inventory_log_id}>
-              <td className="nowrap">{formatDateTime(entry.created_at)}</td>
-              <td className={`number ${entry.qty_change > 0 ? "change-up" : "change-down"}`}>{signed(entry.qty_change)}</td>
-              <td className="number">{entry.stock_after}</td>
-              <td>{reasonLabel(entry.reason)}</td>
-              <td>
-                {entry.order_header_id ? (
-                  <Link to={`/orders/${entry.order_header_id}`} className="order-link">
-                    Order {entry.order_number}
-                  </Link>
-                ) : (
-                  "Manual"
-                )}
-              </td>
-              <td className="muted">{entry.order_header_id ? "" : entry.note || ""}</td>
-            </tr>
-          ))}
+          {entries.map((entry, index) => {
+            const sameEvent = index > 0 && entry.transaction_id && entry.transaction_id === entries[index - 1].transaction_id;
+            return (
+              <tr key={entry.inventory_log_id} className={sameEvent ? "same-event" : undefined}>
+                <td className="nowrap">{sameEvent ? "" : formatDateTime(entry.created_at)}</td>
+                <td>{typeLabel(entry.inv_type)}</td>
+                <td className={`number ${entry.qty_change > 0 ? "change-up" : "change-down"}`}>{signed(entry.qty_change)}</td>
+                <td className="number">{entry.stock_after}</td>
+                <td>{reasonLabel(entry.reason)}</td>
+                <td>
+                  <Source entry={entry} />
+                </td>
+                <td className="muted">{entry.order_header_id || entry.return_id ? "" : entry.note || ""}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -171,6 +283,7 @@ export default function InventoryItemPage() {
   const [state, setState] = useState({ key: null, item: null, history: null, error: "" });
   const [reloads, setReloads] = useState(0);
   const requestKey = `${itemId}:${reloads}`;
+  const reload = () => setReloads((n) => n + 1);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -202,7 +315,7 @@ export default function InventoryItemPage() {
     return (
       <section>
         {back}
-        <ErrorMessage message={state.error} onRetry={() => setReloads((n) => n + 1)} />
+        <ErrorMessage message={state.error} onRetry={reload} />
       </section>
     );
   }
@@ -236,16 +349,21 @@ export default function InventoryItemPage() {
           </p>
         </div>
         <div className="item-stock">
-          <strong>{item.stock_qty}</strong>
           <span className={`badge stock-${item.stock_status}`}>{STOCK_LABELS[item.stock_status]}</span>
         </div>
       </div>
-      {item.shopify?.last_sync_error && (
-        <p className="notice error">Shopify sync pending: {item.shopify.last_sync_error}</p>
+      {item.shopify?.last_sync_error && <p className="notice error">Shopify sync pending: {item.shopify.last_sync_error}</p>}
+      {item.available < 0 && (
+        <p className="notice error">Oversold: orders need {-item.available} more than you have on hand.</p>
       )}
 
+      <Figures item={item} />
+
       <div className="inventory-item-grid">
-        <AdjustForm item={item} onSaved={() => setReloads((n) => n + 1)} />
+        <div className="stack">
+          <AdjustForm item={item} onSaved={reload} />
+          <DamagedActions item={item} onSaved={reload} />
+        </div>
         <div className="card">
           <h2>Stock history</h2>
           <History entries={history} />

@@ -6,8 +6,9 @@ import ProductThumbnail from "../components/ProductThumbnail";
 import { capitalize, formatDateTime, formatMoney } from "../format";
 import { describeLineStock } from "../inventory/stock";
 import { describeChange, describeSource } from "../orders/history";
+import RtoPanel from "../orders/RtoPanel";
 import StatusChangePanel from "../orders/StatusChangePanel";
-import { NEXT_STATUS } from "../orders/status";
+import { NEXT_STATUSES, attentionText } from "../orders/status";
 
 // Document buttons, shown now so the layout is final; each is wired by its own ticket.
 const DOCUMENT_ACTIONS = [
@@ -49,9 +50,15 @@ function Detail({ label, children }) {
   );
 }
 
+// Shipped units that haven't been delivered or sent back yet: what an RTO can cover.
+function rtoMax(line) {
+  return line.shipped_qty - line.delivered_qty - (line.stock?.rto ?? 0);
+}
+
 function Quantity({ line }) {
   const notes = [
     line.shipped_qty > 0 && `${line.shipped_qty} shipped`,
+    line.delivered_qty > 0 && `${line.delivered_qty} delivered`,
     line.cancelled_qty > 0 && `${line.cancelled_qty} cancelled`,
     line.returned_qty > 0 && `${line.returned_qty} returned`,
   ].filter(Boolean);
@@ -88,14 +95,16 @@ export default function OrderDetailPage() {
   const [result, setResult] = useState({ key: null, order: null, error: null });
   const requestKey = `${orderId}:${reloads}`;
   const loading = validId && result.key !== requestKey;
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState(null); // the status change being confirmed
+  const [markingRto, setMarkingRto] = useState(false);
   const [notice, setNotice] = useState(null); // { text, tone: "success" | "error" }
 
   // Opening another order starts without a pending confirmation or old message.
   const [shownOrderId, setShownOrderId] = useState(orderId);
   if (shownOrderId !== orderId) {
     setShownOrderId(orderId);
-    setConfirming(false);
+    setConfirming(null);
+    setMarkingRto(false);
     setNotice(null);
   }
 
@@ -111,6 +120,17 @@ export default function OrderDetailPage() {
       });
     return () => controller.abort();
   }, [orderId, validId, requestKey]);
+
+
+  async function dismissAttention() {
+    try {
+      const updated = await api(`/orders/${orderId}/attention/clear`, { method: "POST" });
+      setResult({ key: requestKey, order: updated, error: null });
+      setNotice({ text: "Flag dismissed.", tone: "success" });
+    } catch (error) {
+      setNotice({ text: error.message, tone: "error" });
+    }
+  }
 
   const back = (
     <Link to={backTo} className="back-link">
@@ -146,7 +166,8 @@ export default function OrderDetailPage() {
   }
 
   const { order } = result;
-  const nextStatus = NEXT_STATUS[order.order_status];
+  const nextStatuses = NEXT_STATUSES[order.order_status] ?? [];
+  const canRto = order.lines.some((line) => rtoMax(line) > 0);
   const money = (amount) => formatMoney(amount, order.currency);
   const lines = [...order.lines].sort((a, b) => a.line_number - b.line_number);
 
@@ -167,17 +188,31 @@ export default function OrderDetailPage() {
           </p>
         </div>
         <div className="actions" role="group" aria-label="Order actions">
-          {nextStatus && (
+          {nextStatuses.map((change, index) => (
             <button
+              key={change.status}
               type="button"
-              className="button"
-              disabled={confirming}
+              className={index === 0 ? "button" : "button secondary"}
+              disabled={Boolean(confirming) || markingRto}
               onClick={() => {
                 setNotice(null);
-                setConfirming(true);
+                setConfirming(change);
               }}
             >
-              {nextStatus.label}
+              {change.label}
+            </button>
+          ))}
+          {canRto && (
+            <button
+              type="button"
+              className="button secondary"
+              disabled={Boolean(confirming) || markingRto}
+              onClick={() => {
+                setNotice(null);
+                setMarkingRto(true);
+              }}
+            >
+              Mark RTO
             </button>
           )}
           {DOCUMENT_ACTIONS.map((action) => (
@@ -194,19 +229,46 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
-      {confirming && nextStatus && (
+      {order.attention_reason && (
+        <div className="notice error attention-banner" role="alert">
+          <span>
+            <strong>Needs attention.</strong> {attentionText(order.attention_reason)}
+          </span>
+          <button type="button" className="button secondary" onClick={dismissAttention}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {markingRto && (
+        <RtoPanel
+          order={order}
+          maxFor={rtoMax}
+          onCancel={() => setMarkingRto(false)}
+          onSaved={(created) => {
+            setMarkingRto(false);
+            setNotice({
+              text: `RTO ${created.return_number} created; the units are expected back by ${created.expected_at}.`,
+              tone: "success",
+            });
+            setReloads((n) => n + 1);
+          }}
+        />
+      )}
+
+      {confirming && (
         <StatusChangePanel
           order={order}
-          change={nextStatus}
-          onCancel={() => setConfirming(false)}
+          change={confirming}
+          onCancel={() => setConfirming(null)}
           onSaved={(updated) => {
             // The API returns the updated order: status, lines and timeline refresh in place.
             setResult({ key: requestKey, order: updated, error: null });
-            setConfirming(false);
+            setConfirming(null);
             setNotice({ text: `Order marked as ${updated.order_status}.`, tone: "success" });
           }}
           onConflict={(message) => {
-            setConfirming(false);
+            setConfirming(null);
             setNotice({ text: `${message} The order has been reloaded.`, tone: "error" });
             setReloads((n) => n + 1);
           }}
@@ -351,6 +413,26 @@ export default function OrderDetailPage() {
         <div className="card">
           <h2>Customer notes</h2>
           <p className="notes">{order.customer_notes}</p>
+        </div>
+      )}
+
+      {order.returns?.length > 0 && (
+        <div className="card">
+          <h2>Returns ({order.returns.length})</h2>
+          <ul className="plain-list">
+            {order.returns.map((ret) => (
+              <li key={ret.return_id}>
+                <Link to={`/returns/${ret.return_id}`} className="order-link">
+                  {ret.return_number}
+                </Link>{" "}
+                <span className="muted small">{ret.return_type === "rto" ? "RTO" : "Customer return"}</span>{" "}
+                <span className={`badge return-${ret.status}`}>{capitalize(ret.status)}</span>
+                {ret.expected_at && ["open", "received"].includes(ret.status) && (
+                  <span className="muted small"> · expected {ret.expected_at}</span>
+                )}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

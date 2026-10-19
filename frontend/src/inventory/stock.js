@@ -5,9 +5,9 @@ export const MAX_CHANGE = 1_000_000;
 
 export const MANUAL_REASONS = [
   { value: "restock", label: "Restock" },
-  { value: "damage", label: "Damaged" },
+  { value: "damage", label: "Damaged (moves to damaged)", removeOnly: true },
   { value: "correction", label: "Correction (count)" },
-  { value: "return", label: "Customer return" },
+  { value: "return", label: "Customer return (no return record)" },
   { value: "other", label: "Other" },
 ];
 
@@ -15,9 +15,35 @@ const REASON_LABELS = {
   ...Object.fromEntries(MANUAL_REASONS.map((reason) => [reason.value, reason.label])),
   order_created: "Order placed",
   order_cancelled: "Order cancelled",
-  order_returned: "Order returned",
+  order_returned: "Order returned (refund)",
   order_edited: "Order edited",
+  order_allocated: "Order acknowledged",
+  order_shipped: "Shipped",
+  order_delivered: "Delivered",
+  order_rto: "RTO",
+  return_opened: "Return approved",
+  return_accepted: "Return accepted (QC)",
+  return_rejected: "Return rejected (QC)",
+  return_cancelled: "Return cancelled",
+  return_closed: "Return closed",
+  damaged_repaired: "Repaired",
+  damaged_written_off: "Written off",
+  opening_stock: "Opening stock",
+  migration: "Starting figure",
 };
+
+const TYPE_LABELS = {
+  ONHAND: "On hand",
+  RETURN_PENDING: "Returning",
+  DAMAGED: "Damaged",
+  OPEN: "Open orders",
+  ALLOCATED: "Allocated",
+  SHIPPED: "Shipped",
+};
+
+export function typeLabel(type) {
+  return TYPE_LABELS[type] ?? "Stock";
+}
 
 export function reasonLabel(reason) {
   return REASON_LABELS[reason] ?? reason;
@@ -35,18 +61,20 @@ export function variantLabel(values) {
 }
 
 // The adjust form's checks, before anything is sent. Returns { field: message }.
-// `mode` is "add" or "remove"; `quantity` is the text typed.
-export function adjustmentErrors({ mode, quantity, reason }, currentStock) {
+// `mode` is "add" or "remove"; `quantity` is the text typed; removals are limited to what
+// is on the shelf (on hand − shipped).
+export function adjustmentErrors({ mode, quantity, reason }, onShelf) {
   const errors = {};
   const text = String(quantity ?? "").trim();
   if (!/^\d+$/.test(text) || Number(text) === 0) {
     errors.quantity = "Enter a whole number above 0.";
   } else if (Number(text) > MAX_CHANGE) {
     errors.quantity = `Enter at most ${MAX_CHANGE.toLocaleString("en-IN")}.`;
-  } else if (mode === "remove" && Number(text) > currentStock) {
-    errors.quantity = `Only ${Math.max(currentStock, 0)} in stock, so ${text} can't be removed.`;
+  } else if (mode === "remove" && Number(text) > onShelf) {
+    errors.quantity = `Only ${Math.max(onShelf, 0)} on the shelf, so ${text} can't be removed.`;
   }
   if (!reason) errors.reason = "Choose a reason.";
+  else if (reason === "damage" && mode === "add") errors.reason = "Damaged units are removed; use Repair to bring them back.";
   return errors;
 }
 
@@ -66,13 +94,20 @@ export function describeSync(result) {
   return { tone: "success", text: "Not sold on Shopify, so nothing to update there." };
 }
 
-// An order line's effect on stock (#21), for the order page.
+// An order line's place in stock (docs/inventory-erd.md), for the order page: its demand
+// (open, allocated, shipped) and the units that left on-hand stock (delivered, RTO).
 export function describeLineStock(stock) {
   if (!stock) return null;
   if (stock.not_counted === "not_linked") return "Stock: not linked to a product";
   if (stock.not_counted === "before_starting_stock") return "Stock: not counted (placed before stock was imported)";
-  if (stock.change === 0) return "Stock: no change";
-  return stock.change < 0 ? `Stock ${signed(stock.change)}` : `Stock ${signed(stock.change)} restocked`;
+  const parts = [
+    stock.open && `${stock.open} open`,
+    stock.allocated && `${stock.allocated} allocated`,
+    stock.shipped && `${stock.shipped} shipped`,
+    stock.delivered && `${stock.delivered} delivered`,
+    stock.rto && `${stock.rto} RTO`,
+  ].filter(Boolean);
+  return parts.length ? `Stock: ${parts.join(" · ")}` : "Stock: nothing held";
 }
 
 export function readInventoryFilters(searchParams) {

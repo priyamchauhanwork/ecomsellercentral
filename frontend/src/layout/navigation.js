@@ -1,7 +1,7 @@
 // Top bar sections and, for each, the side bar links. Side bar links are views of
 // the section; VIEW_PARAMS are the query parameters a view sets.
 
-export const VIEW_PARAMS = ["status", "low"];
+export const VIEW_PARAMS = ["status", "low", "attention", "type", "pending"];
 
 export const SECTIONS = [
   {
@@ -15,9 +15,21 @@ export const SECTIONS = [
     links: [
       { label: "All orders", to: "/orders" },
       { label: "Pending", to: "/orders?status=pending" },
+      { label: "Processing", to: "/orders?status=processing" },
       { label: "Shipped", to: "/orders?status=shipped" },
       { label: "Delivered", to: "/orders?status=delivered" },
       { label: "Cancelled", to: "/orders?status=cancelled" },
+      { label: "Needs attention", to: "/orders?attention=true" },
+    ],
+  },
+  {
+    label: "Returns",
+    path: "/returns",
+    links: [
+      { label: "All returns", to: "/returns" },
+      { label: "Awaiting QC", to: "/returns?pending=true" },
+      { label: "Customer returns", to: "/returns?type=customer_return" },
+      { label: "RTO", to: "/returns?type=rto" },
     ],
   },
   {

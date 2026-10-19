@@ -20,11 +20,16 @@ describe("adjustment checks", () => {
     expect(adjustmentErrors(form("3", "add", ""), 10)).toEqual({ reason: "Choose a reason." });
   });
 
-  it("can't remove more than is in stock, but can add to oversold stock", () => {
-    expect(adjustmentErrors(form("11", "remove"), 10).quantity).toBe("Only 10 in stock, so 11 can't be removed.");
-    expect(adjustmentErrors(form("1", "remove"), -2).quantity).toBe("Only 0 in stock, so 1 can't be removed.");
+  it("can't remove more than is on the shelf, but can always add", () => {
+    expect(adjustmentErrors(form("11", "remove"), 10).quantity).toBe("Only 10 on the shelf, so 11 can't be removed.");
+    expect(adjustmentErrors(form("1", "remove"), -2).quantity).toBe("Only 0 on the shelf, so 1 can't be removed.");
     expect(adjustmentErrors(form("10", "remove"), 10)).toEqual({});
     expect(adjustmentErrors(form("3", "add"), -2)).toEqual({});
+  });
+
+  it("damaged units are only removed", () => {
+    expect(adjustmentErrors(form("1", "add", "damage"), 5).reason).toMatch(/use Repair/);
+    expect(adjustmentErrors(form("1", "remove", "damage"), 5)).toEqual({});
   });
 
   it("caps very large changes", () => {
@@ -52,11 +57,14 @@ describe("messages", () => {
     expect(describeSync({ synced: null }).text).toMatch(/Not sold on Shopify/);
   });
 
-  it("describes an order line's stock effect", () => {
-    expect(describeLineStock({ item_id: 1, change: -2, not_counted: null })).toBe("Stock −2");
-    expect(describeLineStock({ item_id: 1, change: 0, not_counted: null })).toBe("Stock: no change");
-    expect(describeLineStock({ item_id: 1, change: 0, not_counted: "before_starting_stock" })).toMatch(/before stock was imported/);
-    expect(describeLineStock({ item_id: null, change: 0, not_counted: "not_linked" })).toBe("Stock: not linked to a product");
+  it("describes an order line's place in stock", () => {
+    const line = { item_id: 1, open: 0, allocated: 0, shipped: 0, delivered: 0, rto: 0, not_counted: null };
+    expect(describeLineStock({ ...line, open: 2 })).toBe("Stock: 2 open");
+    expect(describeLineStock({ ...line, allocated: 1, shipped: 1 })).toBe("Stock: 1 allocated · 1 shipped");
+    expect(describeLineStock({ ...line, delivered: 1, rto: 1 })).toBe("Stock: 1 delivered · 1 RTO");
+    expect(describeLineStock(line)).toBe("Stock: nothing held");
+    expect(describeLineStock({ ...line, not_counted: "before_starting_stock" })).toMatch(/before stock was imported/);
+    expect(describeLineStock({ ...line, item_id: null, not_counted: "not_linked" })).toBe("Stock: not linked to a product");
     expect(describeLineStock(null)).toBeNull();
   });
 });

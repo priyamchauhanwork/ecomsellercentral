@@ -1208,3 +1208,159 @@ a:hover {
     margin-left: 0;
   }
 }
+
+/* --- Supply & demand, returns ------------------------------------------------------ */
+
+.badge-processing {
+  color: var(--shipped);
+  background: var(--primary-faint);
+  border: 1px solid var(--primary-soft);
+}
+
+.badge-attention {
+  margin-left: 6px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.attention-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.return-requested,
+.return-open {
+  color: var(--pending);
+  background: var(--pending-bg);
+}
+
+.return-received {
+  color: var(--shipped);
+  background: var(--shipped-bg);
+}
+
+.return-qc_done {
+  color: var(--delivered);
+  background: var(--delivered-bg);
+}
+
+.return-closed,
+.return-declined,
+.return-cancelled {
+  color: var(--cancelled);
+  background: var(--cancelled-bg);
+}
+
+.plain-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plain-list li + li {
+  margin-top: 6px;
+}
+
+.inline-field {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inline-field input {
+  width: 90px;
+}
+
+.figure-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.figure strong {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.figure.main {
+  border-color: var(--primary);
+  background: var(--primary-faint);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.damaged-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.data-table tr.same-event td {
+  border-top-style: dashed;
+}
+
+.return-actions {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.qc-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.qc-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.qc-line legend {
+  padding: 0 4px;
+}
+
+.qc-line .field {
+  width: 140px;
+}
+
+@media (max-width: 760px) {
+  .return-actions {
+    grid-template-columns: 1fr;
+  }
+}
+

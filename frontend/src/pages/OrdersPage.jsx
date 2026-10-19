@@ -12,20 +12,21 @@ import {
   quickRanges,
   readFilters,
 } from "../orders/filters";
+import { attentionText } from "../orders/status";
 
 const SEARCH_DELAY_MS = 300;
 
 export default function OrdersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = readFilters(searchParams);
-  const { status, from, to, q } = filters;
+  const { status, from, to, q, attention } = filters;
   const rangeError = dateRangeError(filters);
   const [search, setSearch] = useState(q);
   const [searchedQ, setSearchedQ] = useState(q);
   const [reloads, setReloads] = useState(0);
   // The last finished request: its key, its data or its error.
   const [result, setResult] = useState({ key: null, data: null, error: "" });
-  const requestKey = JSON.stringify([status, from, to, q, reloads]);
+  const requestKey = JSON.stringify([status, from, to, q, attention, reloads]);
   const loading = result.key !== requestKey;
   const navigate = useNavigate();
   const detailState = { listSearch: searchParams.size ? `?${searchParams}` : "" };
@@ -61,7 +62,7 @@ export default function OrdersPage() {
   useEffect(() => {
     if (rangeError) return undefined;
     const controller = new AbortController(); // drop responses for outdated filters
-    api("/orders", { params: { status, from, to, q }, signal: controller.signal })
+    api("/orders", { params: { status, from, to, q, attention }, signal: controller.signal })
       .then((data) => {
         if (!controller.signal.aborted) setResult({ key: requestKey, data, error: "" });
       })
@@ -71,7 +72,7 @@ export default function OrdersPage() {
         }
       });
     return () => controller.abort();
-  }, [status, from, to, q, reloads, rangeError, requestKey]);
+  }, [status, from, to, q, attention, reloads, rangeError, requestKey]);
 
   // While new results load, the previous ones stay visible (dimmed).
   const { data } = result;
@@ -214,6 +215,11 @@ export default function OrdersPage() {
                     <span className={`badge badge-${order.order_status}`}>
                       {capitalize(order.order_status)}
                     </span>
+                    {order.attention_reason && (
+                      <span className="badge badge-attention" title={attentionText(order.attention_reason)}>
+                        Needs attention
+                      </span>
+                    )}
                   </td>
                   <td className="muted">{capitalize(order.payment_status)}</td>
                 </tr>

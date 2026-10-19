@@ -10,12 +10,13 @@ import {
 
 describe("readFilters", () => {
   it("reads valid filters from the URL", () => {
-    const params = new URLSearchParams("status=shipped&from=2026-10-01&to=2026-10-18&q=+asha+");
+    const params = new URLSearchParams("status=processing&from=2026-10-01&to=2026-10-18&q=+asha+&attention=true");
     expect(readFilters(params)).toEqual({
-      status: "shipped",
+      status: "processing",
       from: "2026-10-01",
       to: "2026-10-18",
       q: "asha",
+      attention: "true",
     });
   });
 
@@ -23,7 +24,7 @@ describe("readFilters", () => {
     const params = new URLSearchParams(
       `status=fulfilled&from=18-10-2026&to=2026-02-30&q=${"x".repeat(150)}`,
     );
-    expect(readFilters(params)).toEqual({ status: "", from: "", to: "", q: "x".repeat(100) });
+    expect(readFilters(params)).toEqual({ status: "", from: "", to: "", q: "x".repeat(100), attention: "" });
   });
 });
 

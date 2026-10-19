@@ -8,6 +8,8 @@ import OrdersPage from "./pages/OrdersPage";
 import ProductCreatePage from "./pages/ProductCreatePage";
 import ProductDetailPage from "./pages/ProductDetailPage";
 import ProductsPage from "./pages/ProductsPage";
+import ReturnDetailPage from "./pages/ReturnDetailPage";
+import ReturnsPage from "./pages/ReturnsPage";
 import Placeholder from "./pages/Placeholder";
 
 export default function App() {
@@ -23,6 +25,8 @@ export default function App() {
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="inventory/adjust" element={<InventoryAdjustPage />} />
         <Route path="inventory/:itemId" element={<InventoryItemPage />} />
+        <Route path="returns" element={<ReturnsPage />} />
+        <Route path="returns/:returnId" element={<ReturnDetailPage />} />
         <Route
           path="*"
           element={<Placeholder title="Page not found" ticket="no ticket" backTo={{ to: "/", label: "Home" }} />}

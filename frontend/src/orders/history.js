@@ -33,6 +33,14 @@ export function describeChange(entry) {
       return to ? `Order created · ${to}` : "Order created";
     case "cancelled":
       return "Order cancelled";
+    case "acknowledged":
+      return "Acknowledged: being processed";
+    case "rto": {
+      const units = Object.entries(entry.changed_fields?.rto ?? {}).map(([sku, qty]) => `${qty} × ${sku}`);
+      return units.length ? `Marked RTO: ${units.join(", ")}` : "Marked RTO";
+    }
+    case "attention_cleared":
+      return "Attention flag dismissed";
     case "status_change":
       return from ? `Status changed from ${from} to ${to}` : `Status set to ${to}`;
     case "synced_update": {

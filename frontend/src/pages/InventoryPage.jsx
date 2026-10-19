@@ -177,6 +177,14 @@ export default function InventoryPage() {
             <span className="small">Out of stock</span>
           </div>
           <div>
+            <strong>{data.summary.returning}</strong>
+            <span className="muted small">Units coming back</span>
+          </div>
+          <div>
+            <strong>{data.summary.damaged}</strong>
+            <span className="muted small">Damaged units</span>
+          </div>
+          <div>
             <strong>{driftLoading ? "…" : drift.error ? "—" : drifted}</strong>
             <span className="muted small">
               {driftLoading ? "Checking Shopify…" : drift.error ? "Couldn't check Shopify" : "Differ from Shopify"}
@@ -257,8 +265,16 @@ export default function InventoryPage() {
                 <tr>
                   <th scope="col">Product</th>
                   <th scope="col">SKU</th>
-                  <th scope="col" className="number">Stock</th>
+                  <th scope="col" className="number">Available</th>
                   <th scope="col">Status</th>
+                  <th scope="col" className="number" title="Units the seller has, incl. shipped ones until delivered">
+                    On hand
+                  </th>
+                  <th scope="col" className="number" title="Open + allocated + shipped orders">
+                    Committed
+                  </th>
+                  <th scope="col" className="number">Returning</th>
+                  <th scope="col" className="number">Damaged</th>
                   <th scope="col">Shopify</th>
                   <th scope="col">
                     <span className="sr-only">Actions</span>
@@ -287,10 +303,20 @@ export default function InventoryPage() {
                         <div>{row.sku || "—"}</div>
                         {row.barcode && <div className="muted small">{row.barcode}</div>}
                       </td>
-                      <td className="number">{row.stock_qty}</td>
+                      <td className="number">
+                        <strong>{row.available}</strong>
+                      </td>
                       <td>
                         <span className={`badge stock-${row.stock_status}`}>{STOCK_LABELS[row.stock_status]}</span>
                       </td>
+                      <td className="number">{row.onhand}</td>
+                      <td className="number" title={`${row.open} open · ${row.allocated} allocated · ${row.shipped} shipped`}>
+                        {row.committed || "—"}
+                      </td>
+                      <td className="number" title={row.next_eta ? `Next expected ${row.next_eta}` : undefined}>
+                        {row.return_pending || "—"}
+                      </td>
+                      <td className="number">{row.damaged || "—"}</td>
                       <td>
                         <ShopifyCell row={row} drift={rowDrift} onPush={pushToShopify} pushing={busy === `push:${row.item_id}`} />
                       </td>
