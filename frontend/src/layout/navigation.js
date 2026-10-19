@@ -38,6 +38,7 @@ export const SECTIONS = [
     links: [
       { label: "All stock", to: "/inventory" },
       { label: "Low stock", to: "/inventory?low=true" },
+      { label: "Adjust stock", to: "/inventory/adjust" },
     ],
   },
 ];

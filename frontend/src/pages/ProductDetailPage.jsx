@@ -5,9 +5,9 @@ import { EmptyState, ErrorMessage, Loading } from "../components/Feedback";
 import ProductThumbnail from "../components/ProductThumbnail";
 import Switch from "../components/Switch";
 import { capitalize, formatDateTime, formatMoney } from "../format";
+import { STOCK_LABELS } from "../inventory/stock";
 
 const money = (amount) => (amount == null ? "—" : formatMoney(amount, "INR"));
-const STOCK_LABELS = { ok: "OK", low: "Low", out: "Out" };
 
 // Shopify descriptions are HTML. Shown as plain text: parsing with DOMParser never runs
 // scripts or loads images, and only the text is rendered.
@@ -340,7 +340,10 @@ export default function ProductDetailPage() {
                   <td className="muted">{item.barcode || "—"}</td>
                   <td className="number nowrap">{money(item.mrp)}</td>
                   <td className="number">
-                    {item.stock_qty} <span className={`badge stock-${item.stock_status}`}>{STOCK_LABELS[item.stock_status]}</span>
+                    <Link to={`/inventory/${item.item_id}`} className="order-link" title="Adjust stock and see its history">
+                      {item.stock_qty}
+                    </Link>{" "}
+                    <span className={`badge stock-${item.stock_status}`}>{STOCK_LABELS[item.stock_status]}</span>
                   </td>
                   <td>
                     <span className={`badge badge-${item.status}`}>{capitalize(item.status)}</span>

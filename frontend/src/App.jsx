@@ -1,5 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 import AppLayout from "./layout/AppLayout";
+import InventoryAdjustPage from "./pages/InventoryAdjustPage";
+import InventoryItemPage from "./pages/InventoryItemPage";
+import InventoryPage from "./pages/InventoryPage";
 import OrderDetailPage from "./pages/OrderDetailPage";
 import OrdersPage from "./pages/OrdersPage";
 import ProductCreatePage from "./pages/ProductCreatePage";
@@ -17,7 +20,9 @@ export default function App() {
         <Route path="products" element={<ProductsPage />} />
         <Route path="products/new" element={<ProductCreatePage />} />
         <Route path="products/:productId" element={<ProductDetailPage />} />
-        <Route path="inventory" element={<Placeholder title="Inventory" ticket="#22 (inventory list)" />} />
+        <Route path="inventory" element={<InventoryPage />} />
+        <Route path="inventory/adjust" element={<InventoryAdjustPage />} />
+        <Route path="inventory/:itemId" element={<InventoryItemPage />} />
         <Route
           path="*"
           element={<Placeholder title="Page not found" ticket="no ticket" backTo={{ to: "/", label: "Home" }} />}

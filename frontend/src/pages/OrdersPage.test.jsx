@@ -215,7 +215,10 @@ describe("Orders list", () => {
 
 describe("Top navigation", () => {
   it("switches sections and their side bar", async () => {
-    mockApi();
+    const emptyStock = { summary: { items: 0, low_stock: 0, out_of_stock: 0 }, total: 0, items: [] };
+    mockApi().mockImplementation((input) =>
+      respond(new URL(input).pathname === "/inventory" ? emptyStock : { total: 0, orders: [] }),
+    );
     renderAt("/orders");
     await userEvent.click(screen.getByRole("link", { name: "Inventory" }));
     expect(seen.location.pathname).toBe("/inventory");

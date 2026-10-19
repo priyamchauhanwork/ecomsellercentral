@@ -180,6 +180,25 @@ describe("Order detail", () => {
     expect(totals).not.toHaveTextContent("Refunded");
   });
 
+  it("shows each line's effect on stock, linking to the stock history", async () => {
+    mockApi(
+      respond({
+        ...ORDER,
+        lines: ORDER.lines.map((line) => ({
+          ...line,
+          stock:
+            line.line_number === 1
+              ? { item_id: 7, change: -2, not_counted: null }
+              : { item_id: null, change: 0, not_counted: "not_linked" },
+        })),
+      }),
+    );
+    renderAt("/orders/10");
+    const rows = (await screen.findAllByRole("row")).slice(1);
+    expect(within(rows[0]).getByRole("link", { name: "Stock −2" })).toHaveAttribute("href", "/inventory/7");
+    expect(rows[1]).toHaveTextContent("Stock: not linked to a product");
+  });
+
   it("shows the timeline with the source of each change", async () => {
     mockApi(respond(ORDER));
     renderAt("/orders/10");

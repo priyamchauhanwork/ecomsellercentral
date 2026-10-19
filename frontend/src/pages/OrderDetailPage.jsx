@@ -4,6 +4,7 @@ import { api } from "../api";
 import { EmptyState, ErrorMessage, Loading } from "../components/Feedback";
 import ProductThumbnail from "../components/ProductThumbnail";
 import { capitalize, formatDateTime, formatMoney } from "../format";
+import { describeLineStock } from "../inventory/stock";
 import { describeChange, describeSource } from "../orders/history";
 import StatusChangePanel from "../orders/StatusChangePanel";
 import { NEXT_STATUS } from "../orders/status";
@@ -62,6 +63,17 @@ function Quantity({ line }) {
           {note}
         </div>
       ))}
+      {line.stock && (
+        <div className="muted small">
+          {line.stock.item_id ? (
+            <Link to={`/inventory/${line.stock.item_id}`} title="Stock history">
+              {describeLineStock(line.stock)}
+            </Link>
+          ) : (
+            describeLineStock(line.stock)
+          )}
+        </div>
+      )}
     </>
   );
 }
