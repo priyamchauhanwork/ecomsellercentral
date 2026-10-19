@@ -247,6 +247,31 @@ def test_shopify_not_configured_keeps_the_change(watches, monkeypatch):
     assert body["item"]["available"] == 8 and body["synced"] is False
 
 
+def test_push_stocks_an_unstocked_location_and_turns_tracking_on(watches, shopify):
+    del shopify.levels["8002"]  # e.g. stocked only at another (Collective) location
+    shopify.untracked.add("8002")
+    body = adjust(item_id("WATCH-BLK-42"), 3).json()
+    assert body["synced"] is True and body["sync_error"] is None
+    assert shopify.levels["8002"] == 10 and "8002" not in shopify.untracked
+    assert shopify.calls.count("track") == 1
+    adjust(item_id("WATCH-BLK-42"), 1)
+    assert shopify.levels["8002"] == 11 and shopify.calls.count("track") == 1  # known now
+
+
+def test_unexpected_push_errors_are_recorded(watches, shopify, monkeypatch):
+    from app.services import stock_sync
+
+    def broken(*args):
+        raise KeyError("inventoryItem")
+
+    monkeypatch.setattr(stock_sync, "set_available", broken)
+    response = adjust(item_id(), 1)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["synced"] is False and "Unexpected error: KeyError" in body["sync_error"]
+    assert body["item"]["available"] == 8
+
+
 def test_disabled_sku_stays_at_zero(watches, shopify):
     disable_on_shopify(item_id())
     shopify.levels["8001"] = 0

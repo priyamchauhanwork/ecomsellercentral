@@ -24,6 +24,7 @@ from app.services.shopify import ShopifyClient, ShopifyConfigError, ShopifyError
 from app.services.shopify_catalog import (
     VARIANT_INVENTORY,
     gid,
+    mutate,
     numeric,
     primary_location,
     set_available,
@@ -52,11 +53,22 @@ query ($ids: [ID!]!, $location: ID!) {
 # Shopify ids that never change, looked up once per process instead of being stored.
 _location: dict[str, str] = {}
 _inventory_items: dict[str, str] = {}  # variant id → inventory item gid
+_tracked: set[str] = set()  # inventory items known to have tracking on
+
+INVENTORY_TRACKED = "query ($id: ID!) { inventoryItem(id: $id) { tracked } }"
+INVENTORY_ITEM_UPDATE = """
+mutation ($id: ID!, $input: InventoryItemInput!) {
+  inventoryItemUpdate(id: $id, input: $input) {
+    inventoryItem { id tracked }
+    userErrors { field message }
+  }
+}"""
 
 
 def clear_cache() -> None:
     _location.clear()
     _inventory_items.clear()
+    _tracked.clear()
 
 
 def location(shopify: ShopifyClient) -> str:
@@ -144,23 +156,49 @@ def push(
     """Set Shopify's available quantity to the item's current stock. If the stock
     changed while pushing (an order, another adjustment), push the new figure, so the
     last value sent is always the latest."""
+    with session_factory() as session:
+        item_id = session.get(ChannelListingItem, listing_item_id).item_id
     sent = None
     try:
         for _ in range(PUSH_ATTEMPTS):
             with session_factory() as session:
                 listing_item = session.get(ChannelListingItem, listing_item_id)
-                item = session.get(Item, listing_item.item_id)
-                target = shopify_target(item.stock_qty, listing_item.status)
+                target = shopify_target(session.get(Item, item_id).stock_qty, listing_item.status)
             if target == sent:
                 break
-            set_available(shopify, inventory_item(shopify, variant_id), location(shopify), target)
+            inventory = inventory_item(shopify, variant_id)
+            ensure_tracked(shopify, inventory)
+            set_available(shopify, inventory, location(shopify), target)
             sent = target
-    except ShopifyError as exc:
-        logger.warning("Stock sync of listing item %s failed: %s", listing_item_id, exc)
-        record(session_factory, listing_item_id, str(exc))
-        return SyncOutcome(item.item_id, False, str(exc))
+    except Exception as exc:  # recorded on the SKU and retried; never lost after a commit
+        if isinstance(exc, ShopifyError):
+            logger.warning("Stock sync of listing item %s failed: %s", listing_item_id, exc)
+            message = str(exc)
+        else:
+            logger.exception("Stock sync of listing item %s crashed", listing_item_id)
+            message = f"Unexpected error: {type(exc).__name__}: {exc}"
+        record(session_factory, listing_item_id, message)
+        return SyncOutcome(item_id, False, message)
     record(session_factory, listing_item_id, None)
-    return SyncOutcome(item.item_id, True)
+    return SyncOutcome(item_id, True)
+
+
+def ensure_tracked(shopify: ShopifyClient, inventory: str) -> None:
+    """The app manages stock, so Shopify must track it: a figure on an untracked item is
+    stored but ignored by Shopify. Turns tracking on once; the variant's policy for
+    selling when out of stock is left as it is."""
+    if inventory in _tracked:
+        return
+    tracked = shopify.graphql(INVENTORY_TRACKED, {"id": inventory})["inventoryItem"]["tracked"]
+    if not tracked:
+        mutate(
+            shopify,
+            INVENTORY_ITEM_UPDATE,
+            {"id": inventory, "input": {"tracked": True}},
+            "inventoryItemUpdate",
+        )
+        logger.info("Turned on stock tracking for %s", inventory)
+    _tracked.add(inventory)
 
 
 def record(session_factory: sessionmaker[Session], listing_item_id: int, error: str | None) -> None:

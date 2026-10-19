@@ -40,6 +40,13 @@ class FakeShopify:
 
     def graphql(self, query, variables=None):
         variables = variables or {}
+        if "inventoryItemUpdate" in query:
+            self.calls.append("track")
+            self.untracked.discard(variables["id"].rsplit("/", 1)[-1])
+            return {"inventoryItemUpdate": {"inventoryItem": {"tracked": True}, "userErrors": []}}
+        if "{ tracked }" in query:
+            variant = variables["id"].rsplit("/", 1)[-1]
+            return {"inventoryItem": {"tracked": variant not in self.untracked}}
         if "reverseFulfillmentOrderDispose" in query:
             self.calls.append("dispose")
             if self.dispose_error:
@@ -85,13 +92,16 @@ class FakeShopify:
             if self.on_set:
                 self.on_set()
                 self.on_set = None
-            if change["changeFromQuantity"] != self.levels.get(variant, 0):
+            # Not stocked at the location: Shopify expects a null compare quantity.
+            if change["changeFromQuantity"] != self.levels.get(variant):
                 return {"inventorySetQuantities": {"userErrors": [{"message": "stale"}]}}
             self.levels[variant] = change["quantity"]
             return {"inventorySetQuantities": {"userErrors": []}}
         if "inventoryLevel" in query:
             variant = variables["item"].rsplit("/", 1)[-1]
-            quantities = [{"quantity": self.levels.get(variant, 0)}]
+            if variant not in self.levels:  # not stocked at the location
+                return {"inventoryItem": {"inventoryLevel": None}}
+            quantities = [{"quantity": self.levels[variant]}]
             return {"inventoryItem": {"inventoryLevel": {"quantities": quantities}}}
         if "productVariant" in query:
             self.calls.append("variant")

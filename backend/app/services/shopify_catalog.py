@@ -348,11 +348,13 @@ def set_listing_item_status(
     listing_item.status = status
 
 
-def available(shopify: ShopifyClient, inventory_item: str, location: str) -> int:
+def available(shopify: ShopifyClient, inventory_item: str, location: str) -> int | None:
+    """The available quantity at the location, or None when the item isn't stocked there
+    (no inventory level yet)."""
     level = shopify.graphql(INVENTORY_LEVEL, {"item": inventory_item, "location": location})[
         "inventoryItem"
     ]["inventoryLevel"]
-    return level["quantities"][0]["quantity"] if level else 0
+    return level["quantities"][0]["quantity"] if level else None
 
 
 def set_available(
@@ -361,7 +363,8 @@ def set_available(
     """Set the available quantity. Shopify requires the quantity we expect to replace
     (compare-and-swap, since 2026-04): if it changed between our read and the write,
     read it again and retry once; any other error is raised as it is. Nothing is sent
-    when Shopify already shows that quantity."""
+    when Shopify already shows that quantity. For an item not stocked at the location
+    the expected quantity is null, and Shopify stocks it there with the new figure."""
     for attempt in (1, 2):
         expected = available(shopify, inventory_item, location)
         if expected == quantity:
