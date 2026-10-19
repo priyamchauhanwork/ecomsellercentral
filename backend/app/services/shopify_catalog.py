@@ -360,9 +360,12 @@ def set_available(
 ) -> None:
     """Set the available quantity. Shopify requires the quantity we expect to replace
     (compare-and-swap, since 2026-04): if it changed between our read and the write,
-    read it again and retry once; any other error is raised as it is."""
+    read it again and retry once; any other error is raised as it is. Nothing is sent
+    when Shopify already shows that quantity."""
     for attempt in (1, 2):
         expected = available(shopify, inventory_item, location)
+        if expected == quantity:
+            return
         try:
             mutate(
                 shopify,

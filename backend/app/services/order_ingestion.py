@@ -32,6 +32,7 @@ from app.models import (
     OrderLine,
     OrderLineHistory,
 )
+from app.services.inventory import reconcile_order_stock
 from app.services.order_mapping import (
     LINE_STATUS_RANK,
     MappedOrder,
@@ -522,6 +523,7 @@ def create_order(
     session.flush()
     for line in header.lines:  # link to the catalog when the products are imported (#13)
         link_line(session, run.channel_account_id, run.seller_id, line, row.raw_payload)
+    reconcile_order_stock(session, header, new_order=True)  # #21; Shopify did its own
 
     session.add(
         OrderHistory(
@@ -677,6 +679,7 @@ def update_order(
                 **history_ids(run, row),
             )
         )
+    reconcile_order_stock(session, header, new_order=False)  # #21; Shopify did its own
     return True
 
 

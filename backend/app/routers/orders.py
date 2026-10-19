@@ -5,6 +5,7 @@ The /orders/imports routes are declared before /orders/{order_id} so they match 
 
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.auth import require_api_key
 from app.db import get_db
 from app.models import Article, Item, OrderHeader, OrderImport, OrderImportRow, OrderLine
-from app.services import order_ingestion
+from app.services import inventory, order_ingestion, stock_sync
 from app.services.order_status import OrderStatus, StatusChangeNotAllowed, change_order_status
 from app.services.product_import import image_for
 from app.services.shopify import ShopifyConfigError, ShopifyError
@@ -152,6 +153,14 @@ class OrderList(BaseModel):
     orders: list[OrderSummary]
 
 
+class LineStock(BaseModel):
+    item_id: int | None
+    change: int  # net units logged for this line: −2 deducted, +2 restocked
+    # Why the line doesn't change stock: not linked to a catalog item, or the order was
+    # placed before the item's starting stock was taken.
+    not_counted: Literal["not_linked", "before_starting_stock"] | None
+
+
 class OrderLineOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -183,6 +192,7 @@ class OrderLineOut(BaseModel):
     line_status: str
     # From the linked catalog article (#13); null for lines not linked to the catalog.
     image_url: str | None = None
+    stock: LineStock | None = None  # the line's effect on stock (#21)
     version_no: int
 
 
@@ -327,8 +337,10 @@ def load_order(db: Session, order_id: int, *, for_update: bool = False) -> Order
 def order_detail(db: Session, header: OrderHeader) -> OrderDetail:
     detail = OrderDetail.model_validate(header).model_copy(update={"line_count": len(header.lines)})
     images = line_images(db, header.lines)
+    stock = inventory.line_stock(db, header)
     for line in detail.lines:
         line.image_url = images.get(line.order_line_id)
+        line.stock = LineStock(**stock[line.order_line_id])
     return detail
 
 
@@ -362,12 +374,18 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{order_id}/status", response_model=OrderDetail)
-def update_order_status(order_id: int, change: StatusChange, db: Session = Depends(get_db)):
+def update_order_status(
+    order_id: int,
+    change: StatusChange,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """Manually set an order's status (e.g. "Mark shipped"). Applied to every line still
     open, then the order status is recalculated; header and line history are written.
 
     Allowed: pending → shipped / delivered / cancelled, shipped → delivered.
-    Setting the current status again changes nothing.
+    Setting the current status again changes nothing. Cancelling restocks the lines'
+    items (#21) and, as Shopify doesn't know about it, pushes the new stock there (#20).
     """
     header = load_order(db, order_id, for_update=True)
     try:
@@ -376,7 +394,10 @@ def update_order_status(order_id: int, change: StatusChange, db: Session = Depen
         db.rollback()
         raise HTTPException(409, str(exc)) from exc
     if changed:
+        restocked = inventory.reconcile_order_stock(db, header, new_order=False)
         db.commit()
+        if restocked:
+            background_tasks.add_task(stock_sync.sync_items, restocked)
         db.expire_all()
         header = load_order(db, order_id)
     return order_detail(db, header)

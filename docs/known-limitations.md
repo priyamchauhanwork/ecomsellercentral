@@ -15,3 +15,11 @@ Share this list with the pilot seller before onboarding (#37, #39).
 - **Product images are links, not uploads.** (#45)
 - **Products can't be edited in the app yet;** edit them in Shopify and re-import, or create a new one. (#45)
 
+## Inventory
+
+- **One stock figure per SKU,** for one location (Shopify's primary location). Multi-warehouse stock is a later phase. (#19)
+- **Cancelling in Shopify without restocking still restocks here.** The app gives back the units of a cancelled order (or of items removed by an order edit) even if "Restock items" was unticked in Shopify; the inventory page then shows that SKU as different from Shopify. Adjust it by hand. (#21)
+- **Orders placed before your products were imported don't change stock,** because the imported stock already reflected them. Their lines say so on the order page. (#21)
+- **The app's figure wins on Shopify.** Adjusting stock in the app sets Shopify's available quantity to the app's figure. Edit stock in the app, not in the Shopify admin, or the two will differ until you push the app's figure again from the inventory page. (#20)
+- **A sale on Shopify in the seconds between its order and the app receiving it can be overwritten** by a manual adjustment made in exactly that window; the inventory page then shows the difference. (#20)
+

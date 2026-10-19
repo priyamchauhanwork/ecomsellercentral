@@ -7,6 +7,7 @@ from app.models.catalog import (
     ChannelAccount,
     ChannelListing,
     ChannelListingItem,
+    InventoryLog,
     Item,
     Seller,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "ChannelAccount",
     "ChannelListing",
     "ChannelListingItem",
+    "InventoryLog",
     "Item",
     "Seller",
     "OrderHeader",

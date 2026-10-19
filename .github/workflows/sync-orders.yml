@@ -28,3 +28,13 @@ jobs:
           curl --fail-with-body --silent --show-error
           --max-time 120 --retry 3 --retry-delay 20 --retry-all-errors
           -X POST -H "X-API-Key: $API_KEY" "$SYNC_URL"
+      - name: Retry failed Shopify stock syncs
+        # #20: SKUs whose stock push to Shopify failed. The base URL is ORDER_SYNC_URL
+        # without its /sync/orders path.
+        env:
+          SYNC_URL: ${{ vars.ORDER_SYNC_URL }}
+          API_KEY: ${{ secrets.API_SHARED_SECRET }}
+        run: >
+          curl --fail-with-body --silent --show-error
+          --max-time 120 --retry 3 --retry-delay 20 --retry-all-errors
+          -X POST -H "X-API-Key: $API_KEY" "${SYNC_URL%/sync/orders*}/inventory/sync-pending"

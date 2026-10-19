@@ -58,7 +58,8 @@ def migrated_test_database():
 
 # Sellers and channels are kept: the migration creates seller 1, which orders need.
 ECS_TABLES = (
-    "ecs_order_line_history, ecs_order_history, ecs_order_line, ecs_order_import_row, "
+    "ecs_inventory_log, ecs_order_line_history, ecs_order_history, ecs_order_line, "
+    "ecs_order_import_row, "
     "ecs_order_header, ecs_order_import, ecs_channel_listing_items, ecs_channel_listings, "
     "ecs_items, ecs_articles, ecs_channel_accounts"
 )
