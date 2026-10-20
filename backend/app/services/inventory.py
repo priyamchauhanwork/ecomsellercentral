@@ -54,7 +54,11 @@ class ItemNotFound(LookupError):
 
 
 def inventory_rows(
-    session: Session, filters: list, limit: int | None = None, offset: int = 0
+    session: Session,
+    filters: list,
+    limit: int | None = None,
+    offset: int = 0,
+    order_by: tuple | None = None,
 ) -> list[dict[str, Any]]:
     """Items with their article, stock figures and Shopify listing item."""
     shopify_listing = (
@@ -82,7 +86,7 @@ def inventory_rows(
         .join(item_stock, item_stock.c.item_id == Item.item_id)
         .outerjoin(shopify_listing, shopify_listing.c.item_id == Item.item_id)
         .where(*filters)
-        .order_by(Article.name, Item.sku)
+        .order_by(*(order_by or (Article.name, Item.sku)))
         .limit(limit)
         .offset(offset)
     ).all()

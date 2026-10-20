@@ -465,3 +465,12 @@ Header amounts are Shopify's own totals (they include shipping), not re-added fr
 - **In the app** (#18), the order detail page offers the next step only: *Mark shipped* on a pending order, *Mark delivered* on a shipped one, nothing on delivered or cancelled orders. It asks for confirmation in the page, with an optional note for the timeline, and refreshes in place from the API's response. A 409 (the order changed meanwhile) reloads the order. Shopify is not updated; see `docs/known-limitations.md`.
 
 **Listing** (`GET /orders`): newest `order_date` first, excluding soft-deleted orders; `status`, `from` / `to` (dates, Indian day boundaries, both inclusive), `q` (order number, customer name, email or phone; case-insensitive, `%` and `_` matched literally) and `limit` (1–1000, default 500). The response's `total` counts every matching order, beyond `limit`.
+
+## Dashboard figures (#24)
+
+`GET /reports/dashboard`, computed in the database:
+- **Today** is the Asia/Kolkata calendar day of `order_date` (when the customer placed the order, not when it was imported), from the database clock: `(order_date AT TIME ZONE 'Asia/Kolkata')::date = (now() AT TIME ZONE 'Asia/Kolkata')::date`. An order at 23:30 IST counts for that day; one at 00:10 IST for the next, though both are the same UTC date.
+- **Orders** count every placed order, cancelled ones included; deleted orders (`is_deleted`) never count.
+- **Revenue** = `SUM(total_amount)` of orders that aren't cancelled, in INR only; orders in another currency are counted and reported, never added. Refunds are shown separately, not subtracted.
+- **Low stock** = `available` ≤ 5 on active SKUs of products that aren't archived (the inventory page's scope); the card's total equals the inventory page's *Low stock* view (low 1–5 plus out ≤ 0).
+- **Recent orders**: the 5 newest by `order_date`, ties by id. **Lowest stock**: the 5 smallest `available`, oversold first, ties by product name and SKU.
