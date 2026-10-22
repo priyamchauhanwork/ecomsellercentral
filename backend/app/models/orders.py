@@ -184,6 +184,8 @@ class OrderHeader(TimestampMixin, Base):
         # Duplicate protection for orders. NULL external_order_id (website orders) never
         # collides, because Postgres treats NULLs as distinct.
         UniqueConstraint("seller_id", "channel", "external_order_id"),
+        # Target of ecs_shipments' composite foreign key (a shipment's seller is its order's).
+        UniqueConstraint("order_header_id", "seller_id"),
         Index(None, "seller_id", "order_status", "order_date"),
         Index(None, "customer_phone"),
         CheckConstraint(in_check("channel", CHANNELS), name="channel"),

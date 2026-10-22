@@ -59,8 +59,11 @@ def migrated_test_database():
     yield
 
 
-# Sellers and channels are kept: the migration creates seller 1, which orders need.
+# Sellers, channels, aggregators and status mappings are kept: migrations seed them.
 ECS_TABLES = (
+    "ecs_aggregator_api_calls, ecs_shipment_tracking_events, ecs_aggregator_webhook_events, "
+    "ecs_shipment_documents, ecs_shipment_items, ecs_shipments, ecs_couriers, "
+    "ecs_warehouse_aggregator_links, ecs_warehouses, ecs_aggregator_accounts, "
     "ecs_inventory_log, ecs_inventory_supply, ecs_inventory_demand, ecs_return_lines, "
     "ecs_returns, ecs_order_line_history, ecs_order_history, ecs_order_line, "
     "ecs_order_import_row, "
