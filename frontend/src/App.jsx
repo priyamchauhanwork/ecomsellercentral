@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./layout/AppLayout";
 import DashboardPage from "./pages/DashboardPage";
 import InventoryAdjustPage from "./pages/InventoryAdjustPage";
@@ -11,6 +11,7 @@ import ProductDetailPage from "./pages/ProductDetailPage";
 import ProductsPage from "./pages/ProductsPage";
 import ReturnDetailPage from "./pages/ReturnDetailPage";
 import ReturnsPage from "./pages/ReturnsPage";
+import ShiprocketSettingsPage from "./pages/ShiprocketSettingsPage";
 import Placeholder from "./pages/Placeholder";
 
 export default function App() {
@@ -28,6 +29,8 @@ export default function App() {
         <Route path="inventory/:itemId" element={<InventoryItemPage />} />
         <Route path="returns" element={<ReturnsPage />} />
         <Route path="returns/:returnId" element={<ReturnDetailPage />} />
+        <Route path="settings" element={<Navigate to="/settings/shiprocket" replace />} />
+        <Route path="settings/shiprocket" element={<ShiprocketSettingsPage />} />
         <Route
           path="*"
           element={<Placeholder title="Page not found" ticket="no ticket" backTo={{ to: "/", label: "Home" }} />}

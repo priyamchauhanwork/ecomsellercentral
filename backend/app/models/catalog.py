@@ -101,6 +101,7 @@ class ChannelAccount(TimestampMixin, Base):
     sync_cursor: Mapped[str | None] = mapped_column(String(500))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_status: Mapped[str | None] = mapped_column(String(20))
+    last_error: Mapped[str | None] = mapped_column(Text)  # last failure talking to the channel
     webhook_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     webhook_secret_ref: Mapped[str | None] = mapped_column(String(255))
     webhook_topics: Mapped[list[str] | None] = mapped_column(JSONB)

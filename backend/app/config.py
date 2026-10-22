@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     shopify_api_version: str = "2026-10"
     shopify_webhook_secret: str = ""
 
+    # --- Shiprocket (#57) ---
+    # The API user created in Shiprocket → Settings → API (not the panel login).
+    shiprocket_email: str = ""
+    shiprocket_password: str = ""
+    shiprocket_webhook_token: str = ""  # sent by Shiprocket as x-api-key (#62)
+    # Production by default; the sandbox URL from Shiprocket in development and tests.
+    shiprocket_base_url: str = "https://apiv2.shiprocket.in/v1/external"
+
     # --- Seller details (invoices and labels) ---
     seller_name: str = ""
     seller_gstin: str = ""
@@ -64,6 +72,10 @@ class Settings(BaseSettings):
         admin use the store's secret, those made by the app (return topics, #53) the
         app's client secret."""
         return [s for s in (self.shopify_webhook_secret, self.shopify_api_secret) if s]
+
+    @property
+    def shiprocket_is_sandbox(self) -> bool:
+        return "sandbox" in self.shiprocket_base_url.lower()
 
     @property
     def cors_origin_list(self) -> list[str]:

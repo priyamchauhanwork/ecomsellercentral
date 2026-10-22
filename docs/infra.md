@@ -85,3 +85,11 @@ take a `pg_dump` before any risky migration.
 The web service can stay on Free for the pilot; the cold start is covered by Shopify's
 retries and the polling fallback. Revisit if the pilot seller finds the first page load
 too slow.
+
+## Shiprocket (#57)
+
+- **Credentials**: the seller's Shiprocket *API user* (`SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`), in env vars only, on Render under the backend service's *Environment*. The app logs in for a bearer token (valid 240 hours per Shiprocket), keeps it in memory only, renews it a day before it expires or after a 401, and never stores or logs it. A refused login is held back for a minute before trying again.
+- **Sandbox vs production**: `SHIPROCKET_BASE_URL` selects the host (production `https://apiv2.shiprocket.in/v1/external` by default). The sandbox is IP allow-listed (HTTP 498 otherwise): give Shiprocket the developer's IP and Render's outbound IPs (Render dashboard → service → *Outbound IPs*). With `ENVIRONMENT=production` the backend refuses a sandbox URL.
+- **Check**: Settings → Shiprocket → *Test connection* logs in, lists the pickup locations (with phone verification) and the wallet balance; the outcome is kept on the Shiprocket row of `ecs_channel_accounts` (`connection_status`, `last_synced_at`, `last_error`). API: `GET /shiprocket/status`, `POST /shiprocket/test`.
+- Full setup checklist and API notes: issue #57 ("Integration guide").
+

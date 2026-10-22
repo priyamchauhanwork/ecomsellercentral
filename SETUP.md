@@ -191,6 +191,9 @@ Then edit `.env`:
 | `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` | The app's **Client ID** and **Client secret** (`shpss_…`) from the Shopify Dev Dashboard (see #7). The backend turns them into a 24-hour access token automatically. |
 | `SHOPIFY_ADMIN_API_ACCESS_TOKEN`, `SHOPIFY_WEBHOOK_SECRET` | Leave empty. The token is only for legacy custom apps created in the Shopify admin; webhooks are verified with the client secret. |
 | `SHOPIFY_API_VERSION` | A currently supported version, e.g. `2026-10` |
+| `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD` | The Shiprocket **API user** (Shiprocket → Settings → API → Add New API User), not your Shiprocket login. Can stay empty until you work on shipping. Check them on the app's **Settings → Shiprocket** page (*Test connection*). |
+| `SHIPROCKET_BASE_URL` | The sandbox URL from Shiprocket while developing (the sandbox only accepts IP addresses Shiprocket has allow-listed; otherwise it answers HTTP 498). Leave the default for production. |
+| `SHIPROCKET_WEBHOOK_TOKEN` | Any long random string; the same value goes into Shiprocket → Settings → API → Webhooks (tracking updates, #62) |
 | `SELLER_*` | Business details printed on invoices and labels |
 | `SENDGRID_API_KEY` | From SendGrid; can stay empty locally |
 | `SENTRY_DSN` | Leave empty locally to disable Sentry |

@@ -14,6 +14,7 @@ from app.routers import (
     products,
     reports,
     returns,
+    shiprocket,
     sync,
     webhooks,
 )
@@ -43,6 +44,7 @@ app.include_router(products.router)
 app.include_router(inventory.router)
 app.include_router(returns.router)
 app.include_router(reports.router)
+app.include_router(shiprocket.router)
 
 
 @app.exception_handler(Exception)

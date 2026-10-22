@@ -53,6 +53,11 @@ export const SECTIONS = [
       { label: "Adjust stock", to: "/inventory/adjust" },
     ],
   },
+  {
+    label: "Settings",
+    path: "/settings",
+    links: [{ label: "Shiprocket", to: "/settings/shiprocket" }],
+  },
 ];
 
 export function currentSection(pathname) {
